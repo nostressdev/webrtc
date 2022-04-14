@@ -50,48 +50,32 @@ type Attribute struct {
 	Value string
 }
 
-type Key struct {
-	Method string
-	Value  string
-}
-
-type Format struct {
-	Payload   uint8
-	Name      string
-	ClockRate int
-	Channels  int
-	Feedback  []string
-	Params    []string
-}
-
-type MediaDisc struct {
-	Media       string
-	Port        int64
-	PortsNum    int64
-	Proto       string
-	Fmt         string
-	Attributes  []Attribute
-	Bandwidths  []*Bandwidth
-	Connections []*Connection
-	Keys        []*Key
-	Mode        string
-	Formats     []*Format
-	FormatDescr string
+type MediaDesc struct {
+	Media          string
+	Information    string
+	Port           int64
+	PortsNum       int64
+	Proto          []string
+	Fmts           []string
+	Attributes     []Attribute
+	Bandwidths     []*Bandwidth
+	Connections    []*Connection
+	EncryptionKeys []*EncryptionKey
 }
 
 type Session struct {
-	Version            int
-	Originator         *Origin
-	SessionName        string
-	SessionInformation string
-	URI                string
-	Emails             []string
-	PhoneNumbers       []string
-	ConnectionData     *Connection
-	Bandwidth          []*Bandwidth
-	Timings            []*Timing
-	TimeZones          []*TimeZone
-	EncryptionKeys     []*EncryptionKey
-	Attributes         []*Attribute
-	MediaDiscs         []MediaDisc
+	Version        int
+	Information    string
+	Originator     *Origin
+	SessionName    string
+	URI            string
+	Emails         []string
+	PhoneNumbers   []string
+	ConnectionData *Connection
+	Bandwidth      []*Bandwidth
+	Timings        []*Timing
+	TimeZones      []*TimeZone
+	EncryptionKeys []*EncryptionKey
+	Attributes     []*Attribute
+	MediaDescs     []*MediaDesc
 }

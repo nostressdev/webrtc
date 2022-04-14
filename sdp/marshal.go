@@ -91,15 +91,8 @@ func (d *Decoder) parseAttribute(value string) (*Attribute, error) {
 	return &att, nil
 }
 
-func (d *Decoder) parseSessionInformation(value string) (string, error) {
-	if d.s.SessionInformation != "" {
-		return "", fmt.Errorf("Multiple session names")
-	}
-	return value, nil
-}
-
 func (d *Decoder) parseURI(value string) (string, error) {
-	if d.s.MediaDiscs != nil {
+	if d.s.MediaDescs != nil {
 		return "", fmt.Errorf("URI must be specified before the first media field")
 	}
 
@@ -111,7 +104,7 @@ func (d *Decoder) parseURI(value string) (string, error) {
 }
 
 func (d *Decoder) parseEmail(value string) (string, error) {
-	if d.s.MediaDiscs != nil {
+	if d.s.MediaDescs != nil {
 		return "", fmt.Errorf("Email must be specified before the first media field")
 	}
 
@@ -119,7 +112,7 @@ func (d *Decoder) parseEmail(value string) (string, error) {
 }
 
 func (d *Decoder) parsePhoneNumber(value string) (string, error) {
-	if d.s.MediaDiscs != nil {
+	if d.s.MediaDescs != nil {
 		return "", fmt.Errorf("Phone number must be specified before the first media field")
 	}
 
@@ -304,7 +297,145 @@ func (d *Decoder) parseRepeatTime(value string) (*RepeatTime, error) {
 	return &repeat, nil
 }
 
-func (d *Decoder) parseLine(line string, lineNum int) error {
+func (d *Decoder) parseMedia(value string) (string, error) {
+	if !inSet(value, []string{"audio", "video", "text", "application", "message"}) {
+		return "", fmt.Errorf("Wrong media")
+	}
+	return value, nil
+}
+
+func (d *Decoder) parsePort(value string) (int64, error) {
+	port, err := strconv.ParseInt(value, 10, 64)
+
+	if err != nil {
+		return 0, fmt.Errorf("Error while parsing port: %v", err)
+	}
+
+	if port < 0 || port > 65536 {
+		return 0, fmt.Errorf("Error while parsing poert: port out of range")
+	}
+
+	return port, nil
+}
+
+func (d *Decoder) parsePortsNum(value string) (int64, error) {
+	portsNum, err := strconv.ParseInt(value, 10, 64)
+
+	if err != nil {
+		return 0, fmt.Errorf("Error while parsing ports num: %v", err)
+	}
+
+	return portsNum, nil
+}
+
+func inSet(key string, values []string) bool {
+	for _, value := range values {
+		if value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Decoder) parseMediaDesc(line string, lineNum int) (*MediaDesc, error) {
+	var mediaDesc MediaDesc
+	var err error
+
+	fields := strings.Split(line, " ")
+
+	mediaDesc.Media, err = d.parseMedia(fields[0])
+	if err != nil {
+		return nil, fmt.Errorf("Wrong media discription format: %v", err)
+	}
+
+	parts := strings.Split(fields[1], "/")
+	mediaDesc.Port, err = d.parsePort(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("Wrong media discription format: %v", err)
+	}
+
+	if len(parts) > 1 {
+		mediaDesc.PortsNum, err = d.parsePortsNum(parts[1])
+
+		if err != nil {
+			fmt.Errorf("Wrong media discription format: %v", err)
+		}
+	} else {
+		mediaDesc.PortsNum = 1
+	}
+
+	if len(parts) > 2 {
+		return nil, fmt.Errorf("Wrong media discription format")
+	}
+
+	for _, proto := range strings.Split(fields[2], "/") {
+		if !inSet(proto, []string{"UDP", "RTP", "AVP", "SAVP", "SAVPF", "TLS", "DTLS", "SCTP", "AVPF", "TCP", "MSRP"}) {
+			return nil, fmt.Errorf("Wrong media discription format: wrong protocol format")
+		}
+		mediaDesc.Proto = append(mediaDesc.Proto, proto)
+	}
+
+	fields = fields[3:]
+	for _, field := range fields {
+		mediaDesc.Fmts = append(mediaDesc.Fmts, field)
+	}
+
+	return &mediaDesc, nil
+}
+
+func (d *Decoder) parseInforamtion(line string) string {
+	return line
+}
+
+func (d *Decoder) parseMediaLine(line string, lineNum int) error {
+	var err error
+	media := d.s.MediaDescs[len(d.s.MediaDescs)-1]
+
+	if (len(line) < 2) || (line[1] != '=') {
+		return fmt.Errorf("Wrong line format, line %v", lineNum)
+	}
+
+	key, value := line[0], line[2:]
+	switch key {
+	case 'i':
+		if media.Information != "" {
+			err = fmt.Errorf("Two information per media")
+		} else {
+			media.Information = d.parseInforamtion(value)
+		}
+	case 'c':
+		connectionData, connErr := d.parseConnection(value)
+		if connErr != nil {
+			err = connErr
+		} else {
+			media.Connections = append(media.Connections, connectionData)
+		}
+	case 'b':
+		bandwidth, err := d.parseBandwidth(value)
+		if err == nil {
+			media.Bandwidths = append(media.Bandwidths, bandwidth)
+		}
+	case 'k':
+		key, keyErr := d.parseEncryptionKey(value)
+		if keyErr != nil {
+			err = keyErr
+		} else {
+			media.EncryptionKeys = append(media.EncryptionKeys, key)
+		}
+	case 'a':
+		attribute, attErr := d.parseAttribute(value)
+		if attErr != nil {
+			err = attErr
+		} else {
+			d.s.Attributes = append(d.s.Attributes, attribute)
+		}
+	default:
+		return fmt.Errorf("Unknown parameter type, line %v", lineNum)
+	}
+	return err
+}
+
+func (d *Decoder) parseSessionLine(line string, lineNum int) error {
 	var err error
 
 	if (len(line) < 2) || (line[1] != '=') {
@@ -313,14 +444,18 @@ func (d *Decoder) parseLine(line string, lineNum int) error {
 
 	key, value := line[0], line[2:]
 	switch key {
+	case 'i':
+		if d.s.Information != "" {
+			err = fmt.Errorf("Two information per media")
+		} else {
+			d.s.Information = d.parseInforamtion(value)
+		}
 	case 'v':
 		d.s.Version, err = d.parseVersion(value)
 	case 'o':
 		d.s.Originator, err = d.parseOriginator(value)
 	case 's':
 		d.s.SessionName, err = d.parseSessionName(value)
-	case 'i':
-		d.s.SessionInformation, err = d.parseSessionInformation(value)
 	case 'u':
 		d.s.URI, err = d.parseURI(value)
 	case 'e':
@@ -338,7 +473,11 @@ func (d *Decoder) parseLine(line string, lineNum int) error {
 			d.s.PhoneNumbers = append(d.s.PhoneNumbers, phone)
 		}
 	case 'c':
-		d.s.ConnectionData, err = d.parseConnection(value)
+		if d.s.ConnectionData != nil {
+			err = fmt.Errorf("Multiple connection data descriptions per session")
+		} else {
+			d.s.ConnectionData, err = d.parseConnection(value)
+		}
 	case 'b':
 		bandwidth, bandErr := d.parseBandwidth(value)
 		if bandErr != nil {
@@ -389,20 +528,30 @@ func (d *Decoder) parseLine(line string, lineNum int) error {
 		return fmt.Errorf("Unknown parameter type, line %v", lineNum)
 	}
 
-	if err != nil {
-		return fmt.Errorf("Error while parsing line %v, err: %v", lineNum, err)
-	}
-
-	return nil
+	return err
 }
 
 func (d *Decoder) Decode(r io.Reader) (*Session, error) {
+	var err error
+
 	scanner := bufio.NewScanner(r)
 	lineNum := 1
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		err := d.parseLine(line, lineNum)
+
+		if line[0] == 'm' {
+			mediaDesc, mediaErr := d.parseMediaDesc(line, lineNum)
+			if mediaErr != nil {
+				err = mediaErr
+			} else {
+				d.s.MediaDescs = append(d.s.MediaDescs, mediaDesc)
+			}
+		} else if d.s.MediaDescs != nil {
+			err = d.parseMediaLine(line, lineNum)
+		} else {
+			err = d.parseSessionLine(line, lineNum)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("Error while parsing: %v", err)
 		}
