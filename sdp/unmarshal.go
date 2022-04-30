@@ -483,7 +483,7 @@ func (d *Decoder) parseSessionLine(line string, lineNum int) error {
 		if bandErr != nil {
 			return err
 		}
-		d.s.Bandwidth = append(d.s.Bandwidth, bandwidth)
+		d.s.Bandwidths = append(d.s.Bandwidths, bandwidth)
 
 	case 'z':
 		timeZones, tzErr := d.parseTimeZones(value)

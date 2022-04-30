@@ -3,7 +3,7 @@ package sdp
 
 type Origin struct {
 	Username       string
-	SessId         int64
+	SessID         int64
 	SessVersion    int64
 	Nettype        string
 	Addrtype       string
@@ -57,7 +57,7 @@ type MediaDesc struct {
 	PortsNum       int64
 	Proto          []string
 	Fmts           []string
-	Attributes     []Attribute
+	Attributes     []*Attribute
 	Bandwidths     []*Bandwidth
 	Connections    []*Connection
 	EncryptionKeys []*EncryptionKey
@@ -72,7 +72,7 @@ type Session struct {
 	Emails         []string
 	PhoneNumbers   []string
 	ConnectionData *Connection
-	Bandwidth      []*Bandwidth
+	Bandwidths     []*Bandwidth
 	Timings        []*Timing
 	TimeZones      []*TimeZone
 	EncryptionKeys []*EncryptionKey

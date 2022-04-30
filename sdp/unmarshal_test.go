@@ -63,7 +63,7 @@ a=fmtp:100 profile-level-id=42c01f;level-asymmetry-allowed=1
 				TTL:            127,
 				AddressesNum:   1,
 			},
-			Bandwidth: []*Bandwidth{
+			Bandwidths: []*Bandwidth{
 				{"AS", 2000},
 			},
 			Timings: []*Timing{
