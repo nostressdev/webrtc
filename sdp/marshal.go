@@ -76,7 +76,7 @@ func (e *Encoder) encodeSession(s *Session) string {
 		res += e.encodeMediaDescs(s.MediaDescs)
 	}
 
-	return res[:len(res)-1]
+	return res
 }
 
 func (e *Encoder) encodeVersion(version int) string {
@@ -84,7 +84,7 @@ func (e *Encoder) encodeVersion(version int) string {
 }
 
 func (e *Encoder) encodeOriginator(originator *Origin) string {
-	return originator.Username + " " + strconv.FormatInt(originator.SessID, 10) + " " + strconv.FormatInt(originator.SessVersion, 10) + " " + originator.Nettype + " " + originator.Addrtype + " " + originator.UnicastAddress + "\n"
+	return "o=" + originator.Username + " " + strconv.FormatInt(originator.SessID, 10) + " " + strconv.FormatInt(originator.SessVersion, 10) + " " + originator.Nettype + " " + originator.Addrtype + " " + originator.UnicastAddress + "\n"
 }
 
 func (e *Encoder) encodeSessionName(name string) string {
@@ -126,11 +126,11 @@ func (e *Encoder) encodePhoneNumbers(phones []string) string {
 func (e *Encoder) encodeConnection(connection *Connection) string {
 	var res string
 
-	res += connection.Nettype + " " + connection.Addrtype + " " + connection.ConnectionAddr
+	res += "c=" + connection.Nettype + " " + connection.Addrtype + " " + connection.ConnectionAddr
 	if connection.TTL > 0 {
 		res += "/" + strconv.FormatInt(connection.TTL, 10)
 	}
-	res += "/" + strconv.FormatInt(connection.AddressesNum, 10)
+	res += "/" + strconv.FormatInt(connection.AddressesNum, 10) + "\n"
 	return res
 }
 
@@ -158,6 +158,10 @@ func (e *Encoder) encodeRepeatTime(time *RepeatTime) string {
 	var res string
 
 	res += "r=" + strconv.FormatInt(time.Interval, 10) + " " + strconv.FormatInt(time.Duration, 10)
+
+	if len(time.Offsets) > 0 {
+		res += " "
+	}
 	for i, offset := range time.Offsets {
 		res += strconv.FormatInt(offset, 10)
 
@@ -165,7 +169,6 @@ func (e *Encoder) encodeRepeatTime(time *RepeatTime) string {
 			res += " "
 		}
 	}
-	res += "\n"
 
 	return res
 }
@@ -180,9 +183,10 @@ func (e *Encoder) encodeRepeatTimes(times []*RepeatTime) string {
 
 func (e *Encoder) encodeTiming(timing *Timing) string {
 	var res string
-	res += "t=" + strconv.FormatInt(timing.Start, 10) + " " + strconv.FormatInt(timing.Stop, 10) + "\n"
+	res += "t=" + strconv.FormatInt(timing.Start, 10) + " " + strconv.FormatInt(timing.Stop, 10)
 
 	if timing.RepeatTimes != nil {
+		res += "\n"
 		res += e.encodeRepeatTimes(timing.RepeatTimes)
 	}
 	res += "\n"
@@ -201,12 +205,16 @@ func (e *Encoder) encodeTimings(timings []*Timing) string {
 func (e *Encoder) encodeTimeZones(zones []*TimeZone) string {
 	var res string
 
+	res += "z="
+
 	for i, zone := range zones {
 		res += strconv.FormatInt(zone.Time, 10) + " " + strconv.FormatInt(zone.Offset, 10)
 		if i+1 != len(zones) {
 			res += " "
 		}
 	}
+
+	res += "\n"
 
 	return res
 }

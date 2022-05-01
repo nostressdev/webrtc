@@ -1,14 +1,22 @@
 package sdp
 
 import (
-	"encoding/json"
-	"strings"
+	"bytes"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-var unmarshalTests = []*testVector{
+const (
+	NetworkInternet = "IN"
+)
+
+const (
+	TypeIPv4 = "IP4"
+	TypeIPv6 = "IP6"
+)
+
+var marshalTests = []*testVector{
 	{
 		Name: "RFC4566 Example",
 		Data: `v=0
@@ -18,14 +26,14 @@ i=A Seminar on the session description protocol
 u=http://www.example.com/seminars/sdp.pdf
 e=j.doe@example.com (Jane Doe)
 p=+1 617 555-6011
-c=IN IP4 224.2.17.12/127
+c=IN IP4 224.2.17.12/127/1
 b=AS:2000
 t=3034423619 3042462419
-r=7d 1h 0 25h
-z=3034423619 -1h 3042462419 0
+r=604800 3600 0 90000
+z=3034423619 -3600 3042462419 0
 a=recvonly
-m=audio 49170 RTP/AVP 0
-m=video 51372 RTP/AVP 99 100
+m=audio 49170/1 RTP/AVP 0
+m=video 51372/1 RTP/AVP 99 100
 a=rtpmap:99 h263-1998/90000
 a=rtpmap:100 H264/90000
 a=rtcp-fb:100 ccm fir
@@ -134,10 +142,10 @@ a=fmtp:100 profile-level-id=42c01f;level-asymmetry-allowed=1
 		Data: `v=0
 o=alice 2890844526 2890844526 IN IP4 alice.example.org
 s=Example
-c=IN IP4 127.0.0.1
+c=IN IP4 127.0.0.1/1
 t=0 0
 a=sendrecv
-m=audio 10000 RTP/AVP 0 8
+m=audio 10000/1 RTP/AVP 0 8
 a=rtpmap:0 PCMU/8000
 a=rtpmap:8 PCMA/8000
 `,
@@ -189,11 +197,11 @@ a=rtpmap:8 PCMA/8000
 		Data: `v=0
 o=- 0 2 IN IP4 127.0.0.1
 s=-
-c=IN IP4 127.0.0.1
+c=IN IP4 127.0.0.1/1
 t=0 0
-m=application 10000 DTLS/SCTP 5000
+m=application 10000/1 DTLS/SCTP 5000
 a=sctpmap:5000 webrtc-datachannel 256
-m=application 10000 UDP/DTLS/SCTP webrtc-datachannel
+m=application 10000/1 UDP/DTLS/SCTP webrtc-datachannel
 a=sctp-port:5000
 `,
 		Session: &Session{
@@ -242,39 +250,20 @@ a=sctp-port:5000
 	},
 }
 
-type testVector struct {
-	Name    string
-	Data    string
-	Session *Session
-}
-
-type T struct {
-	*testing.T
-}
-
-func dump(v interface{}) string {
-	b, err := json.MarshalIndent(v, "", "    ")
-	if err != nil {
-		panic(err)
-	}
-
-	return string(b)
-}
-
-func TestUnmarshal(t *testing.T) {
-	for _, v := range unmarshalTests {
+func TestMarshal(t *testing.T) {
+	for _, v := range marshalTests {
 		v := v
 		t.Run(v.Name, func(inner *testing.T) {
 			t := &T{inner}
 
-			d := NewDecoder(strings.NewReader(v.Data))
-			sess, err := d.Decode()
-			if err != nil {
-				t.Fatal(err)
-			}
+			var res string
+			buf := bytes.NewBufferString((res))
 
-			if !cmp.Equal(sess, v.Session) {
-				t.Fatalf("bad Session, got: %s, expected: %s, diff: %v", dump(sess), dump(v.Session), cmp.Diff(sess, v.Session))
+			e := NewEncoder(buf)
+			e.Encode(v.Session)
+
+			if !cmp.Equal(buf.String(), v.Data) {
+				t.Fatalf("bad Session, got: %s, expected: %s, diff: %v", buf.String(), v.Data, cmp.Diff(buf.String(), v.Data))
 			}
 		})
 	}
