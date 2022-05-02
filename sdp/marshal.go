@@ -3,300 +3,297 @@ package sdp
 import (
 	"io"
 	"strconv"
+	"sync"
 )
 
-type Encoder struct {
+type buffer struct {
 	data []byte
-	w    io.Writer
 }
 
-const (
-	defaultBufferSize = 1024
-)
+func (b *buffer) writeInt64(v int64) *buffer {
+	b.data = strconv.AppendInt(b.data, v, 10)
+	return b
+}
+
+func (b *buffer) writeInt(v int) *buffer {
+	return b.writeInt64(int64(v))
+}
+
+func (b *buffer) writeString(v string) *buffer {
+	b.data = append(b.data, v...)
+	return b
+}
+
+func (b *buffer) writeChar(char byte) *buffer {
+	b.data = append(b.data, char)
+	return b
+}
+
+func (b *buffer) writeNewline() *buffer {
+	b.data = append(b.data, '\n')
+	return b
+}
+
+func (b *buffer) writeSpace() *buffer {
+	b.data = append(b.data, ' ')
+	return b
+}
+
+var bufferPool = sync.Pool{
+	New: func() interface{} { return &buffer{} },
+}
+
+type Encoder struct {
+	buffer *buffer
+	w      io.Writer
+}
 
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w: w, data: make([]byte, 0, defaultBufferSize)}
+	return &Encoder{w: w, buffer: bufferPool.Get().(*buffer)}
 }
 
 func (e *Encoder) Encode(s *Session) error {
-	e.data = e.data[:0]
-	e.data = append(e.data, e.encodeSession(s)...)
+	e.encodeSession(s)
 	return e.Flush()
 }
 
 func (e *Encoder) Flush() error {
-	if data := e.data; len(data) > 0 {
-		written, err := e.w.Write(data)
-		e.data = data[:copy(data, data[written:])]
+	written := 0
+
+	for written < len(e.buffer.data) {
+		w, err := e.w.Write(e.buffer.data[written:])
 		if err != nil {
 			return err
 		}
+		written += w
 	}
+
+	e.buffer.data = e.buffer.data[:0]
+	bufferPool.Put(e.buffer)
+
 	return nil
 }
 
-func (e *Encoder) encodeSession(s *Session) string {
-	var res string
-
-	res += e.encodeVersion(s.Version)
-	res += e.encodeOriginator(s.Originator)
-	res += e.encodeSessionName(s.SessionName)
+func (e *Encoder) encodeSession(s *Session) {
+	e.encodeVersion(s.Version)
+	e.encodeOriginator(s.Originator)
+	e.encodeSessionName(s.SessionName)
 
 	if s.Information != "" {
-		res += e.encodeInformation(s.Information)
+		e.encodeInformation(s.Information)
 	}
 	if s.URI != "" {
-		res += e.encodeURI(s.URI)
+		e.encodeURI(s.URI)
 	}
 	if s.Emails != nil {
-		res += e.encodeEmails(s.Emails)
+		e.encodeEmails(s.Emails)
 	}
 	if s.PhoneNumbers != nil {
-		res += e.encodePhoneNumbers(s.PhoneNumbers)
+		e.encodePhoneNumbers(s.PhoneNumbers)
 	}
 	if s.ConnectionData != nil {
-		res += e.encodeConnection(s.ConnectionData)
+		e.encodeConnection(s.ConnectionData)
 	}
 	if s.Bandwidths != nil {
-		res += e.encodeBandwidths(s.Bandwidths)
+		e.encodeBandwidths(s.Bandwidths)
 	}
 	if s.Timings != nil {
-		res += e.encodeTimings(s.Timings)
+		e.encodeTimings(s.Timings)
 	}
 	if s.TimeZones != nil {
-		res += e.encodeTimeZones(s.TimeZones)
+		e.encodeTimeZones(s.TimeZones)
 	}
 	if s.EncryptionKeys != nil {
-		res += e.encodeEncryptionKeys(s.EncryptionKeys)
+		e.encodeEncryptionKeys(s.EncryptionKeys)
 	}
 	if s.Attributes != nil {
-		res += e.encodeAttributes(s.Attributes)
+		e.encodeAttributes(s.Attributes)
 	}
 	if s.MediaDescs != nil {
-		res += e.encodeMediaDescs(s.MediaDescs)
+		e.encodeMediaDescs(s.MediaDescs)
 	}
-
-	return res
 }
 
-func (e *Encoder) encodeVersion(version int) string {
-	return "v=" + strconv.Itoa(version) + "\n"
+func (e *Encoder) encodeVersion(version int) {
+	e.buffer.writeString("v=").writeInt(version).writeNewline()
 }
 
-func (e *Encoder) encodeOriginator(originator *Origin) string {
-	return "o=" + originator.Username + " " + strconv.FormatInt(originator.SessID, 10) + " " + strconv.FormatInt(originator.SessVersion, 10) + " " + originator.Nettype + " " + originator.Addrtype + " " + originator.UnicastAddress + "\n"
+func (e *Encoder) encodeOriginator(originator *Origin) {
+	e.buffer.writeString("o=").writeString(originator.Username).writeSpace().writeInt64(originator.SessID).writeSpace().writeInt64(originator.SessVersion).writeSpace().writeString(originator.Nettype).writeSpace().writeString(originator.Addrtype).writeSpace().writeString(originator.UnicastAddress).writeNewline()
 }
 
-func (e *Encoder) encodeSessionName(name string) string {
-	return "s=" + name + "\n"
+func (e *Encoder) encodeSessionName(name string) {
+	e.buffer.writeString("s=").writeString(name).writeNewline()
 }
 
-func (e *Encoder) encodeURI(URI string) string {
-	return "u=" + URI + "\n"
+func (e *Encoder) encodeURI(URI string) {
+	e.buffer.writeString("u=").writeString(URI).writeNewline()
 }
 
-func (e *Encoder) encodeInformation(info string) string {
-	return "i=" + info + "\n"
+func (e *Encoder) encodeInformation(info string) {
+	e.buffer.writeString("i=").writeString(info).writeNewline()
 }
 
-func (e *Encoder) encodeEmail(email string) string {
-	return "e=" + email + "\n"
+func (e *Encoder) encodeEmail(email string) {
+	e.buffer.writeString("e=").writeString(email).writeNewline()
 }
 
-func (e *Encoder) encodeEmails(emails []string) string {
-	var res string
+func (e *Encoder) encodeEmails(emails []string) {
 	for _, email := range emails {
-		res += e.encodeEmail(email)
+		e.encodeEmail(email)
 	}
-	return res
 }
 
-func (e *Encoder) encodePhoneNumber(phone string) string {
-	return "p=" + phone + "\n"
+func (e *Encoder) encodePhoneNumber(phone string) {
+	e.buffer.writeString("p=").writeString(phone).writeNewline()
 }
 
-func (e *Encoder) encodePhoneNumbers(phones []string) string {
-	var res string
+func (e *Encoder) encodePhoneNumbers(phones []string) {
 	for _, phone := range phones {
-		res += e.encodePhoneNumber(phone)
+		e.encodePhoneNumber(phone)
 	}
-	return res
 }
 
-func (e *Encoder) encodeConnection(connection *Connection) string {
-	var res string
-
-	res += "c=" + connection.Nettype + " " + connection.Addrtype + " " + connection.ConnectionAddr
+func (e *Encoder) encodeConnection(connection *Connection) {
+	e.buffer.writeString("c=").writeString(connection.Nettype).writeSpace().writeString(connection.Addrtype).writeSpace().writeString(connection.ConnectionAddr)
 	if connection.TTL > 0 {
-		res += "/" + strconv.FormatInt(connection.TTL, 10)
+		e.buffer.writeChar('/').writeInt64(connection.TTL)
 	}
-	res += "/" + strconv.FormatInt(connection.AddressesNum, 10) + "\n"
-	return res
+	e.buffer.writeChar('/').writeInt64(connection.AddressesNum).writeNewline()
 }
 
-func (e *Encoder) encodeConnections(connections []*Connection) string {
-	var res string
+func (e *Encoder) encodeConnections(connections []*Connection) {
 	for _, connection := range connections {
-		res += e.encodeConnection(connection)
+		e.encodeConnection(connection)
 	}
-	return res
 }
 
-func (e *Encoder) encodeBandwidth(bandwidth *Bandwidth) string {
-	return "b=" + bandwidth.Type + ":" + strconv.Itoa(bandwidth.Value) + "\n"
+func (e *Encoder) encodeBandwidth(bandwidth *Bandwidth) {
+	e.buffer.writeString("b=").writeString(bandwidth.Type).writeChar(':').writeInt(bandwidth.Value).writeNewline()
 }
 
-func (e *Encoder) encodeBandwidths(bandwidths []*Bandwidth) string {
-	var res string
+func (e *Encoder) encodeBandwidths(bandwidths []*Bandwidth) {
 	for _, bandwidth := range bandwidths {
-		res += e.encodeBandwidth(bandwidth)
+		e.encodeBandwidth(bandwidth)
 	}
-	return res
 }
 
-func (e *Encoder) encodeRepeatTime(time *RepeatTime) string {
-	var res string
-
-	res += "r=" + strconv.FormatInt(time.Interval, 10) + " " + strconv.FormatInt(time.Duration, 10)
+func (e *Encoder) encodeRepeatTime(time *RepeatTime) {
+	e.buffer.writeString("r=").writeInt64(time.Interval).writeSpace().writeInt64(time.Duration)
 
 	if len(time.Offsets) > 0 {
-		res += " "
+		e.buffer.writeSpace()
 	}
 	for i, offset := range time.Offsets {
-		res += strconv.FormatInt(offset, 10)
+		e.buffer.writeInt64(offset)
 
 		if i+1 != len(time.Offsets) {
-			res += " "
+			e.buffer.writeSpace()
 		}
 	}
-
-	return res
 }
 
-func (e *Encoder) encodeRepeatTimes(times []*RepeatTime) string {
-	var res string
+func (e *Encoder) encodeRepeatTimes(times []*RepeatTime) {
 	for _, time := range times {
-		res += e.encodeRepeatTime(time)
+		e.encodeRepeatTime(time)
 	}
-	return res
 }
 
-func (e *Encoder) encodeTiming(timing *Timing) string {
-	var res string
-	res += "t=" + strconv.FormatInt(timing.Start, 10) + " " + strconv.FormatInt(timing.Stop, 10)
+func (e *Encoder) encodeTiming(timing *Timing) {
+	e.buffer.writeString("t=").writeInt64(timing.Start).writeSpace().writeInt64(timing.Stop)
 
 	if timing.RepeatTimes != nil {
-		res += "\n"
-		res += e.encodeRepeatTimes(timing.RepeatTimes)
+		e.buffer.writeNewline()
+		e.encodeRepeatTimes(timing.RepeatTimes)
 	}
-	res += "\n"
-
-	return res
+	e.buffer.writeNewline()
 }
 
-func (e *Encoder) encodeTimings(timings []*Timing) string {
-	var res string
+func (e *Encoder) encodeTimings(timings []*Timing) {
 	for _, timing := range timings {
-		res += e.encodeTiming(timing)
+		e.encodeTiming(timing)
 	}
-	return res
 }
 
-func (e *Encoder) encodeTimeZones(zones []*TimeZone) string {
-	var res string
-
-	res += "z="
+func (e *Encoder) encodeTimeZones(zones []*TimeZone) {
+	e.buffer.writeString("z=")
 
 	for i, zone := range zones {
-		res += strconv.FormatInt(zone.Time, 10) + " " + strconv.FormatInt(zone.Offset, 10)
+		e.buffer.writeInt64(zone.Time).writeSpace().writeInt64(zone.Offset)
 		if i+1 != len(zones) {
-			res += " "
+			e.buffer.writeSpace()
 		}
 	}
 
-	res += "\n"
-
-	return res
+	e.buffer.writeNewline()
 }
 
-func (e *Encoder) encodeEncryptionKey(key *EncryptionKey) string {
-	var res string
-	res += "k=" + key.Method
+func (e *Encoder) encodeEncryptionKey(key *EncryptionKey) {
+	e.buffer.writeString("k=").writeString(key.Method)
+
 	if key.Value != " " {
-		res += ":" + key.Value
+		e.buffer.writeChar(':').writeString(key.Value)
 	}
-	res += "\n"
-	return res
+	e.buffer.writeNewline()
 }
 
-func (e *Encoder) encodeEncryptionKeys(encryptionKeys []*EncryptionKey) string {
-	var res string
+func (e *Encoder) encodeEncryptionKeys(encryptionKeys []*EncryptionKey) {
 	for _, key := range encryptionKeys {
-		res += e.encodeEncryptionKey(key)
+		e.encodeEncryptionKey(key)
 	}
-	return res
 }
 
-func (e *Encoder) encodeAttribute(attribute *Attribute) string {
-	var res string
-	res += "a=" + attribute.Name
+func (e *Encoder) encodeAttribute(attribute *Attribute) {
+	e.buffer.writeString("a=").writeString(attribute.Name)
 	if attribute.Value != " " {
-		res += ":" + attribute.Value
+		e.buffer.writeChar(':').writeString(attribute.Value)
 	}
-	res += "\n"
-	return res
+	e.buffer.writeNewline()
 }
 
-func (e *Encoder) encodeAttributes(attributes []*Attribute) string {
-	var res string
+func (e *Encoder) encodeAttributes(attributes []*Attribute) {
 	for _, attribute := range attributes {
-		res += e.encodeAttribute(attribute)
+		e.encodeAttribute(attribute)
 	}
-	return res
 }
 
-func (e *Encoder) encodeMediaDesc(desc *MediaDesc) string {
-	var res string
-	res += "m=" + desc.Media + " " + strconv.FormatInt(desc.Port, 10) + "/" + strconv.FormatInt(desc.PortsNum, 10) + " "
+func (e *Encoder) encodeMediaDesc(desc *MediaDesc) {
+	e.buffer.writeString("m=").writeString(desc.Media).writeSpace().writeInt64(desc.Port).writeChar('/').writeInt64(desc.PortsNum).writeSpace()
 	for i, proto := range desc.Proto {
-		res += proto
+		e.buffer.writeString(proto)
 		if i+1 != len(desc.Proto) {
-			res += "/"
+			e.buffer.writeChar('/')
 		}
 	}
-	res += " "
+	e.buffer.writeSpace()
 	for i, fmt := range desc.Fmts {
-		res += fmt
+		e.buffer.writeString(fmt)
 		if i+1 != len(desc.Fmts) {
-			res += " "
+			e.buffer.writeSpace()
 		}
 	}
 
-	res += "\n"
+	e.buffer.writeNewline()
 
 	if desc.Information != "" {
-		res += desc.Information + "\n"
+		e.buffer.writeString("i=").writeString(desc.Information).writeNewline()
 	}
 	if desc.Connections != nil {
-		res += e.encodeConnections(desc.Connections)
+		e.encodeConnections(desc.Connections)
 	}
 	if desc.Bandwidths != nil {
-		res += e.encodeBandwidths(desc.Bandwidths)
+		e.encodeBandwidths(desc.Bandwidths)
 	}
 	if desc.EncryptionKeys != nil {
-		res += e.encodeEncryptionKeys(desc.EncryptionKeys)
+		e.encodeEncryptionKeys(desc.EncryptionKeys)
 	}
 	if desc.Attributes != nil {
-		res += e.encodeAttributes(desc.Attributes)
+		e.encodeAttributes(desc.Attributes)
 	}
-
-	return res
 }
 
-func (e *Encoder) encodeMediaDescs(descs []*MediaDesc) string {
-	var res string
+func (e *Encoder) encodeMediaDescs(descs []*MediaDesc) {
 	for _, desc := range descs {
-		res += e.encodeMediaDesc(desc)
+		e.encodeMediaDesc(desc)
 	}
-	return res
 }
