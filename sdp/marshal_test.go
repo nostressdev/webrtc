@@ -254,8 +254,6 @@ func TestMarshal(t *testing.T) {
 	for _, v := range marshalTests {
 		v := v
 		t.Run(v.Name, func(inner *testing.T) {
-			t := &T{inner}
-
 			var res string
 			buf := bytes.NewBufferString((res))
 

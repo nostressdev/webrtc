@@ -248,10 +248,6 @@ type testVector struct {
 	Session *Session
 }
 
-type T struct {
-	*testing.T
-}
-
 func dump(v interface{}) string {
 	b, err := json.MarshalIndent(v, "", "    ")
 	if err != nil {
@@ -265,7 +261,6 @@ func TestUnmarshal(t *testing.T) {
 	for _, v := range unmarshalTests {
 		v := v
 		t.Run(v.Name, func(inner *testing.T) {
-			t := &T{inner}
 
 			d := NewDecoder(strings.NewReader(v.Data))
 			sess, err := d.Decode()
