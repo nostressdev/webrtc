@@ -17,6 +17,63 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{r: r, s: &Session{}}
 }
 
+func (d *Decoder) Decode() (*Session, error) {
+	var err error
+
+	scanner := bufio.NewScanner(d.r)
+	lineNum := 1
+
+	flags := &flags{false, false, false}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if len(line) == 0 {
+			return nil, fmt.Errorf("wrong sdp file format: line %v is empty", lineNum)
+		}
+
+		if line[0] == MediaDescField {
+			if len(line) < 2 {
+				return nil, fmt.Errorf("wrong sdp file format: medialine %v is empty", lineNum)
+			}
+
+			mediaDesc, mediaErr := d.parseMediaDesc(line[2:], lineNum)
+			if mediaErr != nil {
+				err = mediaErr
+			} else {
+				d.s.MediaDescs = append(d.s.MediaDescs, mediaDesc)
+			}
+		} else if d.s.MediaDescs != nil {
+			err = d.parseMediaLine(line, lineNum)
+		} else {
+			err = d.parseSessionLine(line, lineNum, flags)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error while parsing: %v", err)
+		}
+
+		lineNum += 1
+	}
+
+	if scanner.Err() != nil {
+		return nil, fmt.Errorf("error while reading from reader: %v", scanner.Err())
+	}
+
+	if d.s.ConnectionData == nil {
+		for _, mediaDesc := range d.s.MediaDescs {
+			if mediaDesc.Connections == nil {
+				return nil, fmt.Errorf("a session description MUST contain either at least one c= field in each media description or a single c= field at the session level")
+			}
+		}
+	}
+
+	if !checkFlags(flags) {
+		return nil, fmt.Errorf("not all required fields are set")
+	}
+
+	return d.s, nil
+}
+
 func (d *Decoder) parseVersion(value string) (int, error) {
 	version, err := strconv.Atoi(value)
 	if err != nil {
@@ -44,13 +101,13 @@ func (d *Decoder) parseTime(value string) (num int64, err error) {
 
 func (d *Decoder) timeShorthandToSeconds(b byte) int64 {
 	switch b {
-	case 'd':
+	case DayShorthand:
 		return 86400
-	case 'h':
+	case HourShorthand:
 		return 3600
-	case 'm':
+	case MinuteShorthand:
 		return 60
-	case 's':
+	case SecondShorthand:
 		return 1
 	default:
 		return 0
@@ -159,7 +216,7 @@ func (d *Decoder) parseConnection(value string) (*Connection, error) {
 	fields = strings.Split(fields[2], "/")
 	connection.ConnectionAddr = fields[0]
 
-	if connection.Addrtype == "IP4" {
+	if connection.Addrtype == TypeIPv4 {
 		if len(fields) > 1 {
 			connection.TTL, err = strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
@@ -174,7 +231,7 @@ func (d *Decoder) parseConnection(value string) (*Connection, error) {
 		} else {
 			connection.AddressesNum = 1
 		}
-	} else if connection.Addrtype == "IP6" {
+	} else if connection.Addrtype == TypeIPv6 {
 		if len(fields) > 1 {
 			connection.AddressesNum, err = strconv.ParseInt(fields[1], 10, 64)
 			if err != nil {
@@ -395,32 +452,32 @@ func (d *Decoder) parseMediaLine(line string, lineNum int) error {
 
 	key, value := line[0], line[2:]
 	switch key {
-	case 'i':
+	case SessionInfoField:
 		if media.Information != "" {
 			err = fmt.Errorf("two information per media")
 		} else {
 			media.Information = d.parseInforamtion(value)
 		}
-	case 'c':
+	case ConnectionDataField:
 		connectionData, connErr := d.parseConnection(value)
 		if connErr != nil {
 			err = connErr
 		} else {
 			media.Connections = append(media.Connections, connectionData)
 		}
-	case 'b':
+	case BandwidthField:
 		bandwidth, err := d.parseBandwidth(value)
 		if err == nil {
 			media.Bandwidths = append(media.Bandwidths, bandwidth)
 		}
-	case 'k':
+	case EncryptionKeyField:
 		key, keyErr := d.parseEncryptionKey(value)
 		if keyErr != nil {
 			err = keyErr
 		} else {
 			media.EncryptionKeys = append(media.EncryptionKeys, key)
 		}
-	case 'a':
+	case AttributeField:
 		attribute, attErr := d.parseAttribute(value)
 		if attErr != nil {
 			err = attErr
@@ -442,79 +499,79 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 
 	key, value := line[0], line[2:]
 	switch key {
-	case 'i':
+	case SessionInfoField:
 		if d.s.Information != "" {
 			err = fmt.Errorf("two information per media")
 		} else {
 			d.s.Information = d.parseInforamtion(value)
 		}
-	case 'v':
+	case VersionField:
 		d.s.Version, err = d.parseVersion(value)
 		flags.setVersion = true
-	case 'o':
+	case OriginField:
 		d.s.Originator, err = d.parseOriginator(value)
 		flags.setOriginator = true
-	case 's':
+	case SessionNameField:
 		d.s.SessionName, err = d.parseSessionName(value)
 		flags.setSessionName = true
-	case 'u':
+	case URIField:
 		d.s.URI, err = d.parseURI(value)
-	case 'e':
+	case EmailField:
 		email, valErr := d.parseEmail(value)
 		if valErr != nil {
 			err = valErr
 		} else {
 			d.s.Emails = append(d.s.Emails, email)
 		}
-	case 'p':
+	case PhoneNumberField:
 		phone, valErr := d.parsePhoneNumber(value)
 		if valErr != nil {
 			err = valErr
 		} else {
 			d.s.PhoneNumbers = append(d.s.PhoneNumbers, phone)
 		}
-	case 'c':
+	case ConnectionDataField:
 		if d.s.ConnectionData != nil {
 			err = fmt.Errorf("multiple connection data descriptions per session")
 		} else {
 			d.s.ConnectionData, err = d.parseConnection(value)
 		}
-	case 'b':
+	case BandwidthField:
 		bandwidth, bandErr := d.parseBandwidth(value)
 		if bandErr != nil {
 			return err
 		}
 		d.s.Bandwidths = append(d.s.Bandwidths, bandwidth)
 
-	case 'z':
+	case TimeZoneField:
 		timeZones, tzErr := d.parseTimeZones(value)
 		if tzErr != nil {
 			err = tzErr
 		} else {
 			d.s.TimeZones = append(d.s.TimeZones, timeZones...)
 		}
-	case 'k':
+	case EncryptionKeyField:
 		key, keyErr := d.parseEncryptionKey(value)
 		if keyErr != nil {
 			err = keyErr
 		} else {
 			d.s.EncryptionKeys = append(d.s.EncryptionKeys, key)
 		}
-	case 'a':
+	case AttributeField:
 		attribute, attErr := d.parseAttribute(value)
 		if attErr != nil {
 			err = attErr
 		} else {
 			d.s.Attributes = append(d.s.Attributes, attribute)
 		}
-	case 't':
+	case TimingField:
 		timing, timingErr := d.parseTiming(value)
 		if timingErr != nil {
 			return err
 		} else {
 			d.s.Timings = append(d.s.Timings, timing)
 		}
-	case 'r':
+	case RepeatTimeField:
 		repeat, repErr := d.parseRepeatTime(value)
 		if repErr != nil {
 			err = repErr
@@ -534,57 +591,6 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 
 type flags struct {
 	setVersion, setSessionName, setOriginator bool
-}
-
-func (d *Decoder) Decode() (*Session, error) {
-	var err error
-
-	scanner := bufio.NewScanner(d.r)
-	lineNum := 1
-
-	flags := &flags{false, false, false}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if len(line) == 0 {
-			return nil, fmt.Errorf("wrong sdp file format: line %v is empty", lineNum)
-		}
-
-		if line[0] == 'm' {
-			if len(line) < 2 {
-				return nil, fmt.Errorf("wrong sdp file format: medialine %v is empty", lineNum)
-			}
-
-			mediaDesc, mediaErr := d.parseMediaDesc(line[2:], lineNum)
-			if mediaErr != nil {
-				err = mediaErr
-			} else {
-				d.s.MediaDescs = append(d.s.MediaDescs, mediaDesc)
-			}
-		} else if d.s.MediaDescs != nil {
-			err = d.parseMediaLine(line, lineNum)
-		} else {
-			err = d.parseSessionLine(line, lineNum, flags)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("error while parsing: %v", err)
-		}
-
-		lineNum += 1
-	}
-
-	if scanner.Err() != nil {
-		return nil, fmt.Errorf("error while reading from reader: %v", scanner.Err())
-	}
-
-	// TODO: check connection
-
-	if !checkFlags(flags) {
-		return nil, fmt.Errorf("not all required fields are set")
-	}
-
-	return d.s, nil
 }
 
 func checkFlags(flags *flags) bool {

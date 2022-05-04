@@ -8,15 +8,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-const (
-	NetworkInternet = "IN"
-)
-
-const (
-	TypeIPv4 = "IP4"
-	TypeIPv6 = "IP6"
-)
-
 var marshalTests = []*testVector{
 	{
 		Name: "RFC4566 Example",

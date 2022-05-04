@@ -79,3 +79,37 @@ type Session struct {
 	Attributes     []*Attribute
 	MediaDescs     []*MediaDesc
 }
+
+const (
+	NetworkInternet = "IN"
+)
+
+const (
+	TypeIPv4 = "IP4"
+	TypeIPv6 = "IP6"
+)
+
+const (
+	VersionField        = 'v'
+	OriginField         = 'o'
+	SessionNameField    = 's'
+	SessionInfoField    = 'i'
+	URIField            = 'u'
+	EmailField          = 'e'
+	PhoneNumberField    = 'p'
+	ConnectionDataField = 'c'
+	BandwidthField      = 'b'
+	TimingField         = 't'
+	RepeatTimeField     = 'r'
+	TimeZoneField       = 'z'
+	EncryptionKeyField  = 'k'
+	AttributeField      = 'a'
+	MediaDescField      = 'm'
+)
+
+const (
+	DayShorthand    = 'd'
+	HourShorthand   = 'h'
+	MinuteShorthand = 'm'
+	SecondShorthand = 's'
+)

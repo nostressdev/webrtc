@@ -5,6 +5,18 @@ import (
 	"strconv"
 )
 
+type Encoder struct {
+	w io.Writer
+}
+
+func NewEncoder(w io.Writer) *Encoder {
+	return &Encoder{w: w}
+}
+
+func (e *Encoder) Encode(s *Session) {
+	e.encodeSession(s)
+}
+
 func (e *Encoder) writeInt64(v int64) *Encoder {
 	e.w.Write([]byte(strconv.FormatInt(v, 10)))
 	return e
@@ -34,16 +46,8 @@ func (e *Encoder) writeSpace() *Encoder {
 	return e
 }
 
-type Encoder struct {
-	w io.Writer
-}
-
-func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w: w}
-}
-
-func (e *Encoder) Encode(s *Session) {
-	e.encodeSession(s)
+func (e *Encoder) writeField(field byte) *Encoder {
+	return e.writeChar(field).writeChar('=')
 }
 
 func (e *Encoder) encodeSession(s *Session) {
@@ -87,27 +91,30 @@ func (e *Encoder) encodeSession(s *Session) {
 }
 
 func (e *Encoder) encodeVersion(version int) {
-	e.writeString("v=").writeInt(version).writeNewline()
+	e.writeField(VersionField).writeInt(version).writeNewline()
 }
 
 func (e *Encoder) encodeOriginator(originator *Origin) {
-	e.writeString("o=").writeString(originator.Username).writeSpace().writeInt64(originator.SessID).writeSpace().writeInt64(originator.SessVersion).writeSpace().writeString(originator.Nettype).writeSpace().writeString(originator.Addrtype).writeSpace().writeString(originator.UnicastAddress).writeNewline()
+	e.writeField(OriginField).writeString(originator.Username).writeSpace()
+	e.writeInt64(originator.SessID).writeSpace().writeInt64(originator.SessVersion).writeSpace()
+	e.writeString(originator.Nettype).writeSpace().writeString(originator.Addrtype).writeSpace()
+	e.writeString(originator.UnicastAddress).writeNewline()
 }
 
 func (e *Encoder) encodeSessionName(name string) {
-	e.writeString("s=").writeString(name).writeNewline()
+	e.writeField(SessionNameField).writeString(name).writeNewline()
 }
 
 func (e *Encoder) encodeURI(URI string) {
-	e.writeString("u=").writeString(URI).writeNewline()
+	e.writeField(URIField).writeString(URI).writeNewline()
 }
 
 func (e *Encoder) encodeInformation(info string) {
-	e.writeString("i=").writeString(info).writeNewline()
+	e.writeField(SessionInfoField).writeString(info).writeNewline()
 }
 
 func (e *Encoder) encodeEmail(email string) {
-	e.writeString("e=").writeString(email).writeNewline()
+	e.writeField(EmailField).writeString(email).writeNewline()
 }
 
 func (e *Encoder) encodeEmails(emails []string) {
@@ -117,7 +124,7 @@ func (e *Encoder) encodeEmails(emails []string) {
 }
 
 func (e *Encoder) encodePhoneNumber(phone string) {
-	e.writeString("p=").writeString(phone).writeNewline()
+	e.writeField(PhoneNumberField).writeString(phone).writeNewline()
 }
 
 func (e *Encoder) encodePhoneNumbers(phones []string) {
@@ -127,7 +134,8 @@ func (e *Encoder) encodePhoneNumbers(phones []string) {
 }
 
 func (e *Encoder) encodeConnection(connection *Connection) {
-	e.writeString("c=").writeString(connection.Nettype).writeSpace().writeString(connection.Addrtype).writeSpace().writeString(connection.ConnectionAddr)
+	e.writeField(ConnectionDataField).writeString(connection.Nettype).writeSpace().writeString(connection.Addrtype).writeSpace()
+	e.writeString(connection.ConnectionAddr)
 	if connection.TTL > 0 {
 		e.writeChar('/').writeInt64(connection.TTL)
 	}
@@ -141,7 +149,7 @@ func (e *Encoder) encodeConnections(connections []*Connection) {
 }
 
 func (e *Encoder) encodeBandwidth(bandwidth *Bandwidth) {
-	e.writeString("b=").writeString(bandwidth.Type).writeChar(':').writeInt(bandwidth.Value).writeNewline()
+	e.writeField(BandwidthField).writeString(bandwidth.Type).writeChar(':').writeInt(bandwidth.Value).writeNewline()
 }
 
 func (e *Encoder) encodeBandwidths(bandwidths []*Bandwidth) {
@@ -151,7 +159,7 @@ func (e *Encoder) encodeBandwidths(bandwidths []*Bandwidth) {
 }
 
 func (e *Encoder) encodeRepeatTime(time *RepeatTime) {
-	e.writeString("r=").writeInt64(time.Interval).writeSpace().writeInt64(time.Duration)
+	e.writeField(RepeatTimeField).writeInt64(time.Interval).writeSpace().writeInt64(time.Duration)
 
 	if len(time.Offsets) > 0 {
 		e.writeSpace()
@@ -172,7 +180,7 @@ func (e *Encoder) encodeRepeatTimes(times []*RepeatTime) {
 }
 
 func (e *Encoder) encodeTiming(timing *Timing) {
-	e.writeString("t=").writeInt64(timing.Start).writeSpace().writeInt64(timing.Stop)
+	e.writeField(TimingField).writeInt64(timing.Start).writeSpace().writeInt64(timing.Stop)
 
 	if timing.RepeatTimes != nil {
 		e.writeNewline()
@@ -188,7 +196,7 @@ func (e *Encoder) encodeTimings(timings []*Timing) {
 }
 
 func (e *Encoder) encodeTimeZones(zones []*TimeZone) {
-	e.writeString("z=")
+	e.writeField(TimeZoneField)
 
 	for i, zone := range zones {
 		e.writeInt64(zone.Time).writeSpace().writeInt64(zone.Offset)
@@ -201,7 +209,7 @@ func (e *Encoder) encodeTimeZones(zones []*TimeZone) {
 }
 
 func (e *Encoder) encodeEncryptionKey(key *EncryptionKey) {
-	e.writeString("k=").writeString(key.Method)
+	e.writeField(EncryptionKeyField).writeString(key.Method)
 
 	if key.Value != " " {
 		e.writeChar(':').writeString(key.Value)
@@ -216,7 +224,7 @@ func (e *Encoder) encodeEncryptionKeys(encryptionKeys []*EncryptionKey) {
 }
 
 func (e *Encoder) encodeAttribute(attribute *Attribute) {
-	e.writeString("a=").writeString(attribute.Name)
+	e.writeField(AttributeField).writeString(attribute.Name)
 	if attribute.Value != " " {
 		e.writeChar(':').writeString(attribute.Value)
 	}
@@ -230,7 +238,7 @@ func (e *Encoder) encodeAttributes(attributes []*Attribute) {
 }
 
 func (e *Encoder) encodeMediaDesc(desc *MediaDesc) {
-	e.writeString("m=").writeString(desc.Media).writeSpace().writeInt64(desc.Port).writeChar('/').writeInt64(desc.PortsNum).writeSpace()
+	e.writeField(MediaDescField).writeString(desc.Media).writeSpace().writeInt64(desc.Port).writeChar('/').writeInt64(desc.PortsNum).writeSpace()
 	for i, proto := range desc.Proto {
 		e.writeString(proto)
 		if i+1 != len(desc.Proto) {
@@ -248,7 +256,7 @@ func (e *Encoder) encodeMediaDesc(desc *MediaDesc) {
 	e.writeNewline()
 
 	if desc.Information != "" {
-		e.writeString("i=").writeString(desc.Information).writeNewline()
+		e.writeField(SessionInfoField).writeString(desc.Information).writeNewline()
 	}
 	if desc.Connections != nil {
 		e.encodeConnections(desc.Connections)
