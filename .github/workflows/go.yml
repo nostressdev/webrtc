@@ -21,13 +21,14 @@ jobs:
     - name: Test
       run: go test -v ./...
       
-  lint:
+  lint-sdp:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - name: Lint App
+      - name: Lint SDP
         uses: golangci/golangci-lint-action@v2
         with:
           version: v1.40
+          working-directory: sdp
         env:
           ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
