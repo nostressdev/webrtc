@@ -277,11 +277,9 @@ func FuzzEncode(f *testing.F) {
 			buf := bytes.NewBufferString((res))
 
 			e := NewEncoder(buf)
-			err := e.Encode(sess)
-			if err == nil {
-				if buf.String() != data {
-					t.Fatalf("bad encoded session, got: %s, expected: %s, session: %v", buf.String(), data, sess)
-				}
+			e.Encode(sess)
+			if buf.String() != data {
+				t.Fatalf("bad encoded session, got: %s, expected: %s, session: %v", buf.String(), data, sess)
 			}
 		}
 	})
