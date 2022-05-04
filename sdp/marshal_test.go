@@ -2,6 +2,7 @@ package sdp
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -265,4 +266,23 @@ func TestMarshal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzEncode(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data string) {
+		sess, err := NewDecoder(strings.NewReader(data)).Decode()
+		if err == nil {
+			var res string
+
+			buf := bytes.NewBufferString((res))
+
+			e := NewEncoder(buf)
+			err := e.Encode(sess)
+			if err == nil {
+				if buf.String() != data {
+					t.Fatalf("bad encoded session, got: %s, expected: %s, session: %v", buf.String(), data, sess)
+				}
+			}
+		}
+	})
 }

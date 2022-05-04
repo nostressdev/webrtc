@@ -274,3 +274,9 @@ func TestUnmarshal(t *testing.T) {
 		})
 	}
 }
+
+func FuzzDecode(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data string) {
+		NewDecoder(strings.NewReader(data)).Decode()
+	})
+}
