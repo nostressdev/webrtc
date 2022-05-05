@@ -113,3 +113,17 @@ const (
 	MinuteShorthand = 'm'
 	SecondShorthand = 's'
 )
+
+const (
+	UDPproto   = "UDP"
+	RTPproto   = "RTP"
+	AVPproto   = "AVP"
+	SAVPproto  = "SAVP"
+	SAVPFproto = "SAVPF"
+	TLSproto   = "TLS"
+	DTLSproto  = "DTLS"
+	SCTPproto  = "SCTP"
+	AVPFproto  = "AVPF"
+	TCPproto   = "TCP"
+	MSRPproto  = "MSRP"
+)

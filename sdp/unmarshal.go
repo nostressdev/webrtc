@@ -8,13 +8,43 @@ import (
 	"strings"
 )
 
+type level int
+type stage int
+
+const (
+	initLevel    = 0
+	sessionLevel = 1
+	mediaLevel   = 2
+)
+
+const (
+	initStage           = 0
+	versionStage        = 1
+	originStage         = 2
+	sessionNameStage    = 3
+	sessionInfoStage    = 4
+	uriStage            = 5
+	emailStage          = 6
+	phoneStage          = 7
+	connectionDataStage = 8
+	bandwidthStage      = 9
+	timingStage         = 10
+	repeatTimeStage     = 11
+	timeZoneStage       = 12
+	encryptionKeyStage  = 13
+	attributesStage     = 14
+	mediaDescStage      = 15
+)
+
 type Decoder struct {
-	r io.Reader
-	s *Session
+	r            io.Reader
+	s            *Session
+	currentLevel level
+	currentStage stage
 }
 
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{r: r, s: &Session{}}
+	return &Decoder{r: r, s: &Session{}, currentLevel: initLevel, currentStage: initStage}
 }
 
 func (d *Decoder) Decode() (*Session, error) {
@@ -33,6 +63,8 @@ func (d *Decoder) Decode() (*Session, error) {
 		}
 
 		if line[0] == MediaDescField {
+			d.currentStage = initStage
+
 			if len(line) < 2 {
 				return nil, fmt.Errorf("wrong sdp file format: medialine %v is empty", lineNum)
 			}
@@ -46,6 +78,7 @@ func (d *Decoder) Decode() (*Session, error) {
 		} else if d.s.MediaDescs != nil {
 			err = d.parseMediaLine(line, lineNum)
 		} else {
+			d.currentLevel = sessionLevel
 			err = d.parseSessionLine(line, lineNum, flags)
 		}
 		if err != nil {
@@ -426,7 +459,8 @@ func (d *Decoder) parseMediaDesc(line string, lineNum int) (*MediaDesc, error) {
 	}
 
 	for _, proto := range strings.Split(fields[2], "/") {
-		if !inSet(proto, []string{"UDP", "RTP", "AVP", "SAVP", "SAVPF", "TLS", "DTLS", "SCTP", "AVPF", "TCP", "MSRP"}) {
+		if !inSet(proto, []string{UDPproto, RTPproto, AVPproto, SAVPproto, SAVPFproto,
+			TLSproto, DTLSproto, SCTPproto, AVPFproto, TCPproto, MSRPproto}) {
 			return nil, fmt.Errorf("wrong media discription format: wrong protocol format")
 		}
 		mediaDesc.Proto = append(mediaDesc.Proto, proto)
@@ -453,12 +487,20 @@ func (d *Decoder) parseMediaLine(line string, lineNum int) error {
 	key, value := line[0], line[2:]
 	switch key {
 	case SessionInfoField:
+		if !d.isLessStage(sessionInfoStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = sessionInfoStage
 		if media.Information != "" {
 			err = fmt.Errorf("two information per media")
 		} else {
 			media.Information = d.parseInforamtion(value)
 		}
 	case ConnectionDataField:
+		if !d.isLessEqualStage(connectionDataStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = connectionDataStage
 		connectionData, connErr := d.parseConnection(value)
 		if connErr != nil {
 			err = connErr
@@ -466,11 +508,19 @@ func (d *Decoder) parseMediaLine(line string, lineNum int) error {
 			media.Connections = append(media.Connections, connectionData)
 		}
 	case BandwidthField:
+		if !d.isLessEqualStage(bandwidthStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = bandwidthStage
 		bandwidth, err := d.parseBandwidth(value)
 		if err == nil {
 			media.Bandwidths = append(media.Bandwidths, bandwidth)
 		}
 	case EncryptionKeyField:
+		if !d.isLessEqualStage(encryptionKeyStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = encryptionKeyStage
 		key, keyErr := d.parseEncryptionKey(value)
 		if keyErr != nil {
 			err = keyErr
@@ -478,6 +528,10 @@ func (d *Decoder) parseMediaLine(line string, lineNum int) error {
 			media.EncryptionKeys = append(media.EncryptionKeys, key)
 		}
 	case AttributeField:
+		if !d.isLessEqualStage(attributesStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = attributesStage
 		attribute, attErr := d.parseAttribute(value)
 		if attErr != nil {
 			err = attErr
@@ -488,6 +542,18 @@ func (d *Decoder) parseMediaLine(line string, lineNum int) error {
 		return fmt.Errorf("unknown parameter type, line %v", lineNum)
 	}
 	return err
+}
+
+func (d *Decoder) isLessStage(stage stage) bool {
+	return d.currentStage < stage
+}
+
+func (d *Decoder) isLessEqualStage(stage stage) bool {
+	return d.currentStage <= stage
+}
+
+func (d *Decoder) failOnOrder() error {
+	return fmt.Errorf("wrong fields order")
 }
 
 func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error {
@@ -506,17 +572,37 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.Information = d.parseInforamtion(value)
 		}
 	case VersionField:
+		if !d.isLessStage(versionStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = versionStage
 		d.s.Version, err = d.parseVersion(value)
 		flags.setVersion = true
 	case OriginField:
+		if !d.isLessStage(originStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = originStage
 		d.s.Originator, err = d.parseOriginator(value)
 		flags.setOriginator = true
 	case SessionNameField:
+		if !d.isLessStage(sessionNameStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = sessionNameStage
 		d.s.SessionName, err = d.parseSessionName(value)
 		flags.setSessionName = true
 	case URIField:
+		if !d.isLessStage(uriStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = uriStage
 		d.s.URI, err = d.parseURI(value)
 	case EmailField:
+		if !d.isLessEqualStage(emailStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = emailStage
 		email, valErr := d.parseEmail(value)
 		if valErr != nil {
 			err = valErr
@@ -524,6 +610,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.Emails = append(d.s.Emails, email)
 		}
 	case PhoneNumberField:
+		if !d.isLessEqualStage(phoneStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = phoneStage
 		phone, valErr := d.parsePhoneNumber(value)
 		if valErr != nil {
 			err = valErr
@@ -531,12 +621,20 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.PhoneNumbers = append(d.s.PhoneNumbers, phone)
 		}
 	case ConnectionDataField:
+		if !d.isLessStage(connectionDataStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = connectionDataStage
 		if d.s.ConnectionData != nil {
 			err = fmt.Errorf("multiple connection data descriptions per session")
 		} else {
 			d.s.ConnectionData, err = d.parseConnection(value)
 		}
 	case BandwidthField:
+		if !d.isLessEqualStage(bandwidthStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = bandwidthStage
 		bandwidth, bandErr := d.parseBandwidth(value)
 		if bandErr != nil {
 			return err
@@ -544,6 +642,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 		d.s.Bandwidths = append(d.s.Bandwidths, bandwidth)
 
 	case TimeZoneField:
+		if !d.isLessEqualStage(timeZoneStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = timeZoneStage
 		timeZones, tzErr := d.parseTimeZones(value)
 		if tzErr != nil {
 			err = tzErr
@@ -551,6 +653,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.TimeZones = append(d.s.TimeZones, timeZones...)
 		}
 	case EncryptionKeyField:
+		if !d.isLessEqualStage(encryptionKeyStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = encryptionKeyStage
 		key, keyErr := d.parseEncryptionKey(value)
 		if keyErr != nil {
 			err = keyErr
@@ -558,6 +664,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.EncryptionKeys = append(d.s.EncryptionKeys, key)
 		}
 	case AttributeField:
+		if !d.isLessEqualStage(attributesStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = attributesStage
 		attribute, attErr := d.parseAttribute(value)
 		if attErr != nil {
 			err = attErr
@@ -565,6 +675,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.Attributes = append(d.s.Attributes, attribute)
 		}
 	case TimingField:
+		if !d.isLessEqualStage(timingStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = timingStage
 		timing, timingErr := d.parseTiming(value)
 		if timingErr != nil {
 			return err
@@ -572,6 +686,10 @@ func (d *Decoder) parseSessionLine(line string, lineNum int, flags *flags) error
 			d.s.Timings = append(d.s.Timings, timing)
 		}
 	case RepeatTimeField:
+		if !d.isLessEqualStage(repeatTimeStage) {
+			return d.failOnOrder()
+		}
+		d.currentStage = repeatTimeStage
 		repeat, repErr := d.parseRepeatTime(value)
 		if repErr != nil {
 			err = repErr

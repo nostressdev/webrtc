@@ -8,6 +8,40 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+var unmarshalErrorTests = []*testVector{
+	{
+		Name: "Wrong order example",
+		Data: `
+o=alice 2890844526 2890844526 IN IP4 alice.example.org
+c=IN IP4 127.0.0.1
+s=Example
+t=0 0
+a=sendrecv
+v=0
+m=audio 10000 RTP/AVP 0 8
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+`,
+		Session: nil,
+	},
+
+	{
+		Name: "Wrong order example",
+		Data: `
+o=alice 2890844526 2890844526 IN IP4 alice.example.org
+s=Example
+c=IN IP4 127.0.0.1
+t=0 0
+a=sendrecv
+v=0
+m=audio 10000 RTP/AVP 0 8
+a=rtpmap:0 PCMU/8000
+a=rtpmap:8 PCMA/8000
+`,
+		Session: nil,
+	},
+}
+
 var unmarshalTests = []*testVector{
 	{
 		Name: "RFC4566 Example",
@@ -270,6 +304,18 @@ func TestUnmarshal(t *testing.T) {
 
 			if !cmp.Equal(sess, v.Session) {
 				t.Fatalf("bad Session, got: %s, expected: %s, diff: %v", dump(sess), dump(v.Session), cmp.Diff(sess, v.Session))
+			}
+		})
+	}
+
+	for _, v := range unmarshalErrorTests {
+		v := v
+		t.Run(v.Name, func(inner *testing.T) {
+
+			d := NewDecoder(strings.NewReader(v.Data))
+			_, err := d.Decode()
+			if err == nil {
+				t.Fatal("error was expected")
 			}
 		})
 	}
