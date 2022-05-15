@@ -1,0 +1,34 @@
+name: Go
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: '>=1.17.0'
+
+    - name: Test
+      run: go test -v ./...
+      
+  lint-sdp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Lint SDP
+        uses: golangci/golangci-lint-action@v2
+        with:
+          version: v1.40
+          working-directory: sdp
+        env:
+          ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
