@@ -245,11 +245,13 @@ func (e *Encoder) encodeMediaDesc(desc *MediaDesc) {
 			e.writeChar('/')
 		}
 	}
-	e.writeSpace()
-	for i, fmt := range desc.Fmts {
-		e.writeString(fmt)
-		if i+1 != len(desc.Fmts) {
-			e.writeSpace()
+	if len(desc.Fmts) != 0 {
+		e.writeSpace()
+		for i, fmt := range desc.Fmts {
+			e.writeString(fmt)
+			if i+1 != len(desc.Fmts) {
+				e.writeSpace()
+			}
 		}
 	}
 
