@@ -4,8 +4,8 @@ type RTCRtpTransceiver struct {
 	mid              string
 	sender           *RTCRtpSender
 	receiver         *RTCRtpReceiver
-	direction        *RTCRtpTransceiverDirection
-	currentDirection *RTCRtpTransceiverDirection
+	direction        RTCRtpTransceiverDirection
+	currentDirection RTCRtpTransceiverDirection
 	stopped          bool
 	stopping         bool
 }

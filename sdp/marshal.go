@@ -225,7 +225,7 @@ func (e *Encoder) encodeEncryptionKeys(encryptionKeys []*EncryptionKey) {
 
 func (e *Encoder) encodeAttribute(attribute *Attribute) {
 	e.writeField(AttributeField).writeString(attribute.Name)
-	if attribute.Value != " " {
+	if attribute.Value != " " && attribute.Value != "" {
 		e.writeChar(':').writeString(attribute.Value)
 	}
 	e.writeNewline()

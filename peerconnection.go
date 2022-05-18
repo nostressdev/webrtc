@@ -2,6 +2,8 @@ package webrtc
 
 import (
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/nostressdev/webrtc/sdp"
@@ -29,6 +31,7 @@ type RTCPeerConnection struct {
 	lastCreatedOffer                        string
 	lastCreatedAnswer                       string
 	rtpTransceivers                         []*RTCRtpTransceiver
+	midCounter                              int64
 	// TODO(@alisa-vernigor): sctpTransport, earlyCandidates, operations, localIceCredentialsToReplace
 	// TODO(@alisa-vernigor): add event handlers
 }
@@ -56,7 +59,7 @@ func (pc *RTCPeerConnection) isBundleOnly(bundlePolicy RTCBundlePolicy, isFirstI
 	return false
 }
 
-func (pc *RTCPeerConnection) generateInitialOffer() {
+func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
 	session := &sdp.Session{}
 	session.Version = 0
 	session.Originator = &sdp.Origin{
@@ -74,15 +77,13 @@ func (pc *RTCPeerConnection) generateInitialOffer() {
 			Stop:  0,
 		},
 	}
-	session.Attributes = []*sdp.Attribute{
-		{
-			Name:  "ice-options",
-			Value: "trickle ice2",
-		},
-	}
+
+	session.AddAttribute("ice-options", "trickle ice2")
 
 	// TODO(@alisa-vernigor): identity?
 	// TODO(@alisa-vernigor): add session-level attribute "fingerprint"
+
+	mids := []string{}
 
 	bundlePolicy := pc.configuration.BundlePolicy
 	isFirstInGroup := map[string]bool{
@@ -99,16 +100,33 @@ func (pc *RTCPeerConnection) generateInitialOffer() {
 		}
 		media := &sdp.MediaDesc{}
 		kind := tranceiver.receiver.track.kind
+
 		media.Media = kind
+		media.Fmts = []string{"35", "36"}
+		media.AddAttribute("rtpmap", "35 opus/48000")
+		media.AddAttribute("rtpmap", "36 H264 AVC/90000")
+
+		// RTP retransmission ?
 
 		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, kind) {
 			media.Port = 0
+			media.AddAttribute("bundle-only", " ")
 		} else {
 			media.Port = 9
+			// media.AddAttribute("rtcp", "9 IN IP4 0.0.0.0") ?
+			// media.AddAttribute("rtcp-mux", " ") ?
+			// media.AddAttribute("rtcp-mux-only", " ") ?
+			// media.AddAttribute("rtcp-rsize", " ") ?
+			media.AddAttribute("fingerprint", " ")
+			media.AddAttribute("setup", "actpass")
+
+			for _, cert := range pc.configuration.Certificates {
+				// TODO(@alisa-vernigor): сертификаты
+				// media.AddAttribute("fingerprint", cert.)
+			}
 		}
 		media.Proto = []string{"UDP", "TLS", "RTP", "SAVPF"}
 
-		// TODO(@alisa-vernigor): codecs
 		media.Connections = []*sdp.Connection{
 			{
 				Nettype:        sdp.NetworkInternet,
@@ -117,8 +135,19 @@ func (pc *RTCPeerConnection) generateInitialOffer() {
 				AddressesNum:   1,
 			},
 		}
+
+		mid := strconv.FormatInt(pc.midCounter, 10)
+		media.AddAttribute("mid", mid)
+		mids = append(mids, mid)
+		pc.midCounter++
+
+		media.AddAttribute(string(tranceiver.direction), " ")
+	}
+	if len(mids) > 0 {
+		session.AddAttribute("group", "BUNDLE "+strings.Join(mids, " "))
 	}
 
+	return session
 }
 
 func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionDescription, error) {
