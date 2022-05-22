@@ -1,10 +1,12 @@
 package webrtc
 
 import (
+	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nostressdev/webrtc/sdp"
 )
@@ -59,7 +61,22 @@ func (pc *RTCPeerConnection) isBundleOnly(bundlePolicy RTCBundlePolicy, isFirstI
 	return false
 }
 
-func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
+const (
+	alphaNumCharset = "abcdefghijklmnopqrstuvwxyz" + "0123456789"
+)
+
+func randStringWithCharset(length int, charset string) string {
+	var seededRand *rand.Rand = rand.New(
+		rand.NewSource(time.Now().UnixNano()))
+
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[seededRand.Intn(len(charset))]
+	}
+	return string(b)
+}
+
+func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 	session := &sdp.Session{}
 	session.Version = 0
 	session.Originator = &sdp.Origin{
@@ -80,7 +97,6 @@ func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
 
 	session.AddAttribute("ice-options", "trickle ice2")
 
-	// TODO(@alisa-vernigor): identity?
 	// TODO(@alisa-vernigor): add session-level attribute "fingerprint"
 
 	mids := []string{}
@@ -103,10 +119,12 @@ func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
 
 		media.Media = kind
 		media.Fmts = []string{"35", "36"}
-		media.AddAttribute("rtpmap", "35 opus/48000")
-		media.AddAttribute("rtpmap", "36 H264 AVC/90000")
 
-		// RTP retransmission ?
+		media.AddAttribute("rtpmap", "35 opus/48000")
+		media.AddAttribute("fmtp", "35 useinbandfec=1") // Specifies that the decoder has the capability to take advantage of the Opus in-band FEC (Forward Error Correction)
+
+		media.AddAttribute("rtpmap", "36 H264 AVC/90000")
+		media.AddAttribute("maxptime", "120")
 
 		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, kind) {
 			media.Port = 0
@@ -116,13 +134,20 @@ func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
 			// media.AddAttribute("rtcp", "9 IN IP4 0.0.0.0") ?
 			// media.AddAttribute("rtcp-mux", " ") ?
 			// media.AddAttribute("rtcp-mux-only", " ") ?
-			// media.AddAttribute("rtcp-rsize", " ") ?
+			media.AddAttribute("rtcp-rsize", " ")
 			media.AddAttribute("fingerprint", " ")
 			media.AddAttribute("setup", "actpass")
-
+			media.AddAttribute("tls-id", randStringWithCharset(120, alphaNumCharset))
+			media.AddAttribute("ice-ufrag", randStringWithCharset(4, alphaNumCharset))
+			media.AddAttribute("ice-pwd", randStringWithCharset(22, alphaNumCharset))
 			for _, cert := range pc.configuration.Certificates {
-				// TODO(@alisa-vernigor): сертификаты
-				// media.AddAttribute("fingerprint", cert.)
+				fingerprints, err := cert.getFingerprints()
+				if err != nil {
+					return nil, fmt.Errorf("error while getting fingerprints: %v", err)
+				}
+				for _, fingerprint := range fingerprints {
+					media.AddAttribute("fingerprint", fingerprint.Algorithm+" "+fingerprint.Value)
+				}
 			}
 		}
 		media.Proto = []string{"UDP", "TLS", "RTP", "SAVPF"}
@@ -142,7 +167,30 @@ func (pc *RTCPeerConnection) generateInitialOffer() *sdp.Session {
 		pc.midCounter++
 
 		media.AddAttribute(string(tranceiver.direction), " ")
+		//media.AddAttribute("")
 	}
+
+	// for datachannels
+	media := &sdp.MediaDesc{}
+	media.Connections = []*sdp.Connection{
+		{
+			Nettype:        sdp.NetworkInternet,
+			Addrtype:       sdp.TypeIPv4,
+			ConnectionAddr: "0.0.0.0",
+			AddressesNum:   1,
+		},
+	}
+	media.Media = "application"
+	media.Proto = []string{"UDP", "DTLS", "SCTP"}
+	media.Port = 9
+	media.Fmts = []string{"webrtc-datachannel"}
+	media.AddAttribute("sctp-port", "") //TODO: port number
+
+	mid := strconv.FormatInt(pc.midCounter, 10)
+	media.AddAttribute("mid", mid)
+	mids = append(mids, mid)
+	pc.midCounter++
+
 	if len(mids) > 0 {
 		session.AddAttribute("group", "BUNDLE "+strings.Join(mids, " "))
 	}

@@ -5,3 +5,7 @@ type RTCCertificate struct {
 }
 
 type EpochTimeStamp uint64
+
+func (c *RTCCertificate) getFingerprints() ([]*RTCDtlsFingerprint, error) {
+	return nil, nil
+}
