@@ -97,9 +97,8 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 
 	session.AddAttribute("ice-options", "trickle ice2")
 
-	// TODO(@alisa-vernigor): add session-level attribute "fingerprint"
-
 	mids := []string{}
+	msidsToMidStrings := make(map[string][]string)
 
 	bundlePolicy := pc.configuration.BundlePolicy
 	isFirstInGroup := map[string]bool{
@@ -110,6 +109,18 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 		"message":     true,
 	}
 
+	tlsID := randStringWithCharset(120, alphaNumCharset)
+	iceUfrag := randStringWithCharset(4, alphaNumCharset)
+	icePwd := randStringWithCharset(22, alphaNumCharset)
+	var fingerprints []*RTCDtlsFingerprint
+	var err error
+	for _, cert := range pc.configuration.Certificates {
+		fingerprints, err = cert.getFingerprints()
+		if err != nil {
+			return nil, fmt.Errorf("error while getting fingerprints: %v", err)
+		}
+	}
+
 	for _, tranceiver := range pc.rtpTransceivers {
 		if tranceiver.stopped || tranceiver.stopping {
 			continue
@@ -118,40 +129,38 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 		kind := tranceiver.receiver.track.kind
 
 		media.Media = kind
-		media.Fmts = []string{"35", "36"}
 
-		media.AddAttribute("rtpmap", "35 opus/48000")
-		media.AddAttribute("fmtp", "35 useinbandfec=1") // Specifies that the decoder has the capability to take advantage of the Opus in-band FEC (Forward Error Correction)
-
-		media.AddAttribute("rtpmap", "36 H264 AVC/90000")
-		media.AddAttribute("maxptime", "120")
+		if tranceiver.sender.track.kind == "audio" {
+			media.Fmts = []string{"35"}
+			media.AddAttribute("rtpmap", "35 opus/48000")
+			media.AddAttribute("fmtp", "35 useinbandfec=1") // Specifies that the decoder has the capability to take advantage of the Opus in-band FEC (Forward Error Correction)
+		} else if tranceiver.sender.track.kind == "video" {
+			media.Fmts = []string{"36"}
+			media.AddAttribute("rtpmap", "36 H264 AVC/90000")
+			media.AddAttribute("maxptime", "120")
+		}
 
 		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, kind) {
 			media.Port = 0
 			media.AddAttribute("bundle-only", " ")
 		} else {
 			media.Port = 9
-			// media.AddAttribute("rtcp", "9 IN IP4 0.0.0.0") ?
-			// media.AddAttribute("rtcp-mux", " ") ?
-			// media.AddAttribute("rtcp-mux-only", " ") ?
 			media.AddAttribute("rtcp-rsize", " ")
-			media.AddAttribute("fingerprint", " ")
 			media.AddAttribute("setup", "actpass")
-			media.AddAttribute("tls-id", randStringWithCharset(120, alphaNumCharset))
-			media.AddAttribute("ice-ufrag", randStringWithCharset(4, alphaNumCharset))
-			media.AddAttribute("ice-pwd", randStringWithCharset(22, alphaNumCharset))
-			for _, cert := range pc.configuration.Certificates {
-				fingerprints, err := cert.getFingerprints()
-				if err != nil {
-					return nil, fmt.Errorf("error while getting fingerprints: %v", err)
-				}
-				for _, fingerprint := range fingerprints {
-					media.AddAttribute("fingerprint", fingerprint.Algorithm+" "+fingerprint.Value)
-				}
+			media.AddAttribute("tls-id", tlsID)
+			media.AddAttribute("ice-ufrag", iceUfrag)
+			media.AddAttribute("ice-pwd", icePwd)
+
+			for _, fingerprint := range fingerprints {
+				media.AddAttribute("fingerprint", fingerprint.Algorithm+" "+fingerprint.Value)
 			}
 		}
 		media.Proto = []string{"UDP", "TLS", "RTP", "SAVPF"}
 
+		for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
+			media.AddAttribute("msid", mediaStreamId)
+			msidsToMidStrings[mediaStreamId] = append(msidsToMidStrings[mediaStreamId], strconv.FormatInt(pc.midCounter, 10))
+		}
 		media.Connections = []*sdp.Connection{
 			{
 				Nettype:        sdp.NetworkInternet,
@@ -167,10 +176,8 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 		pc.midCounter++
 
 		media.AddAttribute(string(tranceiver.direction), " ")
-		//media.AddAttribute("")
 	}
 
-	// for datachannels
 	media := &sdp.MediaDesc{}
 	media.Connections = []*sdp.Connection{
 		{
@@ -184,7 +191,16 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 	media.Proto = []string{"UDP", "DTLS", "SCTP"}
 	media.Port = 9
 	media.Fmts = []string{"webrtc-datachannel"}
-	media.AddAttribute("sctp-port", "") //TODO: port number
+	media.AddAttribute("sctp-port", "5000")
+
+	media.AddAttribute("rtcp-rsize", " ")
+	media.AddAttribute("setup", "actpass")
+	media.AddAttribute("tls-id", tlsID)
+	media.AddAttribute("ice-ufrag", iceUfrag)
+	media.AddAttribute("ice-pwd", icePwd)
+	for _, fingerprint := range fingerprints {
+		media.AddAttribute("fingerprint", fingerprint.Algorithm+" "+fingerprint.Value)
+	}
 
 	mid := strconv.FormatInt(pc.midCounter, 10)
 	media.AddAttribute("mid", mid)
@@ -195,7 +211,13 @@ func (pc *RTCPeerConnection) generateInitialOffer() (*sdp.Session, error) {
 		session.AddAttribute("group", "BUNDLE "+strings.Join(mids, " "))
 	}
 
-	return session
+	for _, midStrings := range msidsToMidStrings {
+		if len(midStrings) > 1 {
+			session.AddAttribute("group", "LS "+strings.Join(midStrings, " "))
+		}
+	}
+
+	return session, nil
 }
 
 func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionDescription, error) {
