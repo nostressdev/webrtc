@@ -3,7 +3,8 @@ package webrtc
 import "fmt"
 
 const (
-	ErrInvalidState = "InvalidStateError"
+	ErrInvalidState        = "InvalidStateError"
+	ErrInvalidModification = "InvalidModificationError"
 )
 
 func makeError(code string, message string) (err error) {

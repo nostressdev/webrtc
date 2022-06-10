@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -41,6 +42,79 @@ type RTCPeerConnection struct {
 type sessionDescOptions struct {
 	includeRTCPSize   bool
 	includeBundleOnly bool
+}
+
+func (pc *RTCPeerConnection) setSessionDescription(description *RTCSessionDescription, remote bool) error {
+	if description.SDPType == RTCSdpTypeRollback &&
+		(pc.signalingState == RTCSignalingStateStable ||
+			pc.signalingState == RTCSignalingStateHaveLocalPranswer ||
+			pc.signalingState == RTCSignalingStateHaveRemotePranswer) {
+		return makeError(ErrInvalidState, "description type rollback, while signaling state stable/have-local-pranswer/have-remote-pranswer")
+	}
+	jsepSetOfTranceivers := pc.rtpTransceivers
+
+	switch description.SDPType {
+	case RTCSdpTypeRollback:
+
+	default:
+	}
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) setLocalDescription(description *RTCSessionDescription) error {
+	var session *sdp.Session
+	var sdpType RTCSdpType
+	var sdpString string
+	var err error
+
+	if description != nil {
+		session = description.Session
+		sdpType = description.SDPType
+		sdpString = description.SDPString
+	} else {
+		if pc.signalingState == RTCSignalingStateStable || pc.signalingState == RTCSignalingStateHaveLocalOffer || pc.signalingState == RTCSignalingStateHaveRemotePranswer {
+			sdpType = RTCSdpTypeOffer
+		} else {
+			sdpType = RTCSdpTypeAnswer
+		}
+		session = nil
+		sdpString = ""
+	}
+
+	if sdpType == RTCSdpTypeOffer && sdpString != "" && sdpString != pc.lastCreatedOffer {
+		return makeError(ErrInvalidModification, "description is not equal to last created offer")
+	}
+
+	if (sdpType == RTCSdpTypeAnswer || sdpType == RTCSdpTypePranswer) && sdpString != "" && sdpString != pc.lastCreatedAnswer {
+		return makeError(ErrInvalidModification, "description is not equal to last created answer")
+	}
+
+	if sdpString == "" && sdpType == RTCSdpTypeOffer {
+		sdpString = pc.lastCreatedOffer
+		if sdpString == "" {
+			// TODO: create offer if empty
+		} else {
+			tmp := sdpString
+			buf := bytes.NewBufferString(tmp)
+
+			session, err = sdp.NewDecoder(buf).Decode()
+			if err != nil {
+				return fmt.Errorf("failed to decode last created offer")
+			}
+		}
+	}
+
+	if sdpString == "" && (sdpType == RTCSdpTypeAnswer || sdpType == RTCSdpTypePranswer) {
+		sdpString = pc.lastCreatedAnswer
+		if sdpString == "" {
+			// TODO(@alisa-vernigor): create answer if empty
+		} else {
+
+		}
+	}
+
+	return nil
 }
 
 func (pc *RTCPeerConnection) isBundleOnly(bundlePolicy RTCBundlePolicy, isFirstInGroup map[string]bool, kind string) bool {
@@ -293,6 +367,35 @@ func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionD
 
 		offer = &RTCSessionDescription{}
 		offer.SDPType = RTCSdpTypeOffer
+
+		tranceivers := pc.rtpTransceivers
+
+		if pc.currentRemoteDescription != nil {
+			for _, media := range pc.currentLocalDescription.Session.MediaDescs {
+				midArg := media.GetAttribute("mid")
+				mid, err := strconv.ParseInt(midArg, 10, 64)
+				if err != nil {
+					return nil, fmt.Errorf("error while getting mid value: %v", err)
+				}
+
+				if mid > pc.midCounter {
+					pc.midCounter = mid + 1
+				}
+			}
+		}
+
+		if (pc.currentRemoteDescription != nil) || (pc.currentLocalDescription != nil) {
+			for _, tranceiver := range tranceivers {
+				if tranceiver.stopped {
+					continue
+				}
+
+				if tranceiver.mid == "" {
+					tranceiver.mid = strconv.FormatInt(pc.midCounter, 10)
+				}
+				pc.midCounter++
+			}
+		}
 
 		if pc.lastCreatedOffer == "" {
 			session, err := pc.createSessionDesc()

@@ -135,3 +135,12 @@ func (m *MediaDesc) AddAttribute(name string, value string) {
 func (s *Session) AddAttribute(name string, value string) {
 	s.Attributes = append(s.Attributes, &Attribute{Name: name, Value: value})
 }
+
+func (m *MediaDesc) GetAttribute(name string) string {
+	for _, attribute := range m.Attributes {
+		if attribute.Name == name {
+			return attribute.Value
+		}
+	}
+	return ""
+}
