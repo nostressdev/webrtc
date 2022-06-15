@@ -136,11 +136,30 @@ func (s *Session) AddAttribute(name string, value string) {
 	s.Attributes = append(s.Attributes, &Attribute{Name: name, Value: value})
 }
 
-func (m *MediaDesc) GetAttribute(name string) string {
+func (m *MediaDesc) GetAttribute(name string) []string {
+	var res []string
 	for _, attribute := range m.Attributes {
 		if attribute.Name == name {
-			return attribute.Value
+			res = append(res, attribute.Value)
 		}
 	}
-	return ""
+	return res
+}
+
+func (s *Session) GetAttribute(name string) []string {
+	var res []string
+	for _, attribute := range s.Attributes {
+		if attribute.Name == name {
+			res = append(res, attribute.Value)
+		}
+	}
+	return res
+}
+
+func (s *Session) ExcludeAttribute(name string) {
+	for index, attribute := range s.Attributes {
+		if attribute.Name == name {
+			s.Attributes = append(s.Attributes[:index], s.Attributes[index+1:]...)
+		}
+	}
 }

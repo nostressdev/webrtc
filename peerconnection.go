@@ -39,9 +39,202 @@ type RTCPeerConnection struct {
 	// TODO(@alisa-vernigor): add event handlers
 }
 
-type sessionDescOptions struct {
-	includeRTCPSize   bool
-	includeBundleOnly bool
+func (pc *RTCPeerConnection) matchIceOptions(session *sdp.Session, sessionToMatch *sdp.Session) {
+	iceOptionsValues := sessionToMatch.GetAttribute("ice-options")
+	for _, iceOptionsValue := range iceOptionsValues {
+		if iceOptionsValue == "trickle ice2" || iceOptionsValue != "ice2 trickle" {
+			return
+		}
+	}
+
+	session.ExcludeAttribute("ice-options")
+}
+
+func (pc *RTCPeerConnection) findTransceiverByMid(mid string) *RTCRtpTransceiver {
+	for _, tranceiver := range pc.rtpTransceivers {
+		if tranceiver.mid == mid {
+			return tranceiver
+		}
+	}
+	return nil
+}
+
+func (pc *RTCPeerConnection) addLSGroups(session *sdp.Session, sessionToMatch *sdp.Session) {
+	groups := sessionToMatch.GetAttribute("group")
+	var LSGroups [][]string
+
+	for _, group := range groups {
+		if len(group) > 2 && group[:1] == "LS" {
+			LSGroups = append(LSGroups, strings.Split(group, " ")[1:])
+		}
+	}
+
+	for _, LSGroup := range LSGroups {
+		msidsToMidStrings := make(map[string][]string)
+		for _, mid := range LSGroup {
+			tranceiver := pc.findTransceiverByMid(mid)
+			if tranceiver == nil {
+				continue
+			}
+			for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
+				msidsToMidStrings[mediaStreamId] = append(msidsToMidStrings[mediaStreamId], tranceiver.mid)
+			}
+
+			if len(tranceiver.sender.associatedMediaStreamIds) == 0 {
+				for msid, _ := range msidsToMidStrings {
+					msidsToMidStrings[msid] = append(msidsToMidStrings[msid], tranceiver.mid)
+				}
+			}
+		}
+
+		for msid, _ := range msidsToMidStrings {
+			if len(msidsToMidStrings[msid]) > 1 {
+				session.AddAttribute("group", "LS"+" "+strings.Join(msidsToMidStrings[msid], " "))
+			}
+		}
+	}
+}
+
+func (pc *RTCPeerConnection) getCodecNameByFmt(media *sdp.MediaDesc, format string) (string, error) {
+	rtpmaps := media.GetAttribute("rtpmap")
+	for _, rtpmap := range rtpmaps {
+		parsedRtpmap := strings.Split(rtpmap, " ")
+		if len(parsedRtpmap) < 2 {
+			return "", fmt.Errorf("wrong rtpmap format")
+		}
+		if parsedRtpmap[0] == format {
+			return strings.Split(strings.Join(parsedRtpmap[1:], " "), "/")[0], nil
+		}
+	}
+	return "", nil
+}
+
+func (pc *RTCPeerConnection) containSupportedCodecs(media *sdp.MediaDesc, supportedCodecs []string) (bool, error) {
+	supportedCodecsMap := make(map[string]bool)
+	for _, codec := range supportedCodecs {
+		supportedCodecsMap[codec] = true
+	}
+
+	for _, format := range media.Fmts {
+		codecName, err := pc.getCodecNameByFmt(media, format)
+		if err != nil {
+			return false, fmt.Errorf("error while getting codec name: %v", err)
+		}
+
+		if supportedCodecsMap[codecName] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessionToMatch *sdp.Session) error {
+	var isRejected []bool
+
+	bundlePolicy := pc.configuration.BundlePolicy
+	isFirstInGroup := map[string]bool{
+		"audio":       true,
+		"video":       true,
+		"text":        true,
+		"application": true,
+		"message":     true,
+	}
+	isBundled := make(map[string]bool)
+
+	groups := sessionToMatch.GetAttribute("group")
+	for _, group := range groups {
+		if len(group) > 6 && group[:6] == "BUNDLE" {
+			for _, mid := range strings.Split(group, " ")[1:] {
+				isBundled[mid] = true
+			}
+		}
+	}
+
+	for _, mediaDesc := range sessionToMatch.MediaDescs {
+		midAttr := mediaDesc.GetAttribute("mid")
+		if midAttr == nil {
+			isRejected = append(isRejected, true)
+			continue
+		}
+		mid := midAttr[0]
+
+		if mediaDesc.Media == "audio" {
+			gotSupportedCodecs, err := pc.containSupportedCodecs(mediaDesc, []string{"opus"})
+			if err != nil {
+				return fmt.Errorf("error with codecs: %v", err)
+			}
+			if !gotSupportedCodecs {
+				isRejected = append(isRejected, true)
+				continue
+			}
+		}
+
+		tranceiver := pc.findTransceiverByMid(mid)
+		if tranceiver.stopped {
+			isRejected = append(isRejected, true)
+			continue
+		}
+
+		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, tranceiver.sender.track.kind) {
+			isRejected = append(isRejected, true)
+			continue
+		}
+
+		if isBundled[mid] && mediaDesc.Port == 0 {
+			isRejected = append(isRejected, true)
+			continue
+		}
+
+		isRejected = append(isRejected, false)
+	}
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) createAnswer(answer *RTCSessionDescription) (*sdp.Session, error) {
+	session := &sdp.Session{}
+
+	pc.addSessionLevelAttributes(session)
+	pc.matchIceOptions(session, pc.currentRemoteDescription.Session)
+
+	pc.addLSGroups(session, pc.currentLocalDescription.Session)
+
+	pc.addMatchedMediaSections(session, pc.currentRemoteDescription.Session)
+
+	return nil, nil
+}
+
+func (pc *RTCPeerConnection) applyLocalDescription(description *RTCSessionDescription) error {
+	for _, mediaDesc := range description.Session.MediaDescs {
+
+	}
+}
+
+func (pc *RTCPeerConnection) processLocalDescription(description *RTCSessionDescription) error {
+	switch description.SDPType {
+	case RTCSdpTypeRollback:
+		// do rollback
+	case RTCSdpTypeOffer:
+		if pc.signalingState != RTCSignalingStateStable && pc.signalingState != RTCSignalingStateHaveLocalOffer {
+			return fmt.Errorf("description type offer, but signaling state is not stable/have-local-offer")
+		}
+
+		if description.SDPString != pc.lastCreatedOffer {
+			return fmt.Errorf("description was altered since last call to createOffer")
+		}
+	case RTCSdpTypePranswer, RTCSdpTypeAnswer:
+		if pc.signalingState != RTCSignalingStateHaveRemoteOffer && pc.signalingState != RTCSignalingStateHaveLocalPranswer {
+			return fmt.Errorf("description type answer/pranswer, but signaling state is not have-remote-offer/have-local-pranswer")
+		}
+
+		if description.SDPString != pc.lastCreatedAnswer {
+			return fmt.Errorf("description was altered since last call to createAnswer")
+		}
+	default:
+		return fmt.Errorf("unknown description type")
+	}
+
+	return nil
 }
 
 func (pc *RTCPeerConnection) setSessionDescription(description *RTCSessionDescription, remote bool) error {
@@ -51,13 +244,7 @@ func (pc *RTCPeerConnection) setSessionDescription(description *RTCSessionDescri
 			pc.signalingState == RTCSignalingStateHaveRemotePranswer) {
 		return makeError(ErrInvalidState, "description type rollback, while signaling state stable/have-local-pranswer/have-remote-pranswer")
 	}
-	jsepSetOfTranceivers := pc.rtpTransceivers
-
-	switch description.SDPType {
-	case RTCSdpTypeRollback:
-
-	default:
-	}
+	//jsepSetOfTranceivers := pc.rtpTransceivers
 
 	return nil
 }
@@ -291,8 +478,7 @@ func (pc *RTCPeerConnection) addMediaSections(session *sdp.Session, mids []strin
 	return nil
 }
 
-func (pc *RTCPeerConnection) createSessionDesc() (*sdp.Session, error) {
-	session := &sdp.Session{}
+func (pc *RTCPeerConnection) addSessionLevelAttributes(session *RTCSession) {
 	session.Version = 0
 	session.Originator = &sdp.Origin{
 		Username:       "-",
@@ -313,6 +499,12 @@ func (pc *RTCPeerConnection) createSessionDesc() (*sdp.Session, error) {
 	}
 
 	session.AddAttribute("ice-options", "trickle ice2")
+}
+
+func (pc *RTCPeerConnection) createInitialOffer() (*sdp.Session, error) {
+	session := &sdp.Session{}
+	pc.addSessionLevelAttributes(session)
+
 	mids := []string{}
 	msidsToMidStrings := make(map[string][]string)
 
@@ -398,7 +590,7 @@ func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionD
 		}
 
 		if pc.lastCreatedOffer == "" {
-			session, err := pc.createSessionDesc()
+			session, err := pc.createInitialOffer()
 			if err != nil {
 				return nil, fmt.Errorf("error while creating offer: %v", err)
 			} else {
