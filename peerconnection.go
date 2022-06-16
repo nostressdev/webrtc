@@ -128,6 +128,60 @@ func (pc *RTCPeerConnection) containSupportedCodecs(media *sdp.MediaDesc, suppor
 	return false, nil
 }
 
+type iceCredentials struct {
+	iceUfrag string
+	icePwd   string
+}
+
+func (pc *RTCPeerConnection) genereateIceCredentials() *iceCredentials {
+	return &iceCredentials{
+		iceUfrag: randStringWithCharset(4, alphaNumCharset),
+		icePwd:   randStringWithCharset(22, alphaNumCharset),
+	}
+}
+
+func (pc *RTCPeerConnection) addMatchedDirection(mediaDesc *sdp.MediaDesc, directionToMatch RTCRtpTransceiverDirection) {
+	if directionToMatch == RTCRtpTransceiverDirectionRecvonly {
+		mediaDesc.AddAttribute(RTCRtpTransceiverDirectionSendonly, " ")
+	} else if directionToMatch == RTCRtpTransceiverDirectionSendonly {
+		mediaDesc.AddAttribute(RTCRtpTransceiverDirectionRecvonly, " ")
+	} else if directionToMatch == RTCRtpTransceiverDirectionSendrecv {
+		mediaDesc.AddAttribute(RTCRtpTransceiverDirectionSendrecv, " ")
+	} else {
+		mediaDesc.AddAttribute(string(directionToMatch), " ")
+	}
+}
+
+func (pc *RTCPeerConnection) getDirection(mediaDesc *sdp.MediaDesc) RTCRtpTransceiverDirection {
+	if mediaDesc.GetAttribute("sendrecv") != nil {
+		return RTCRtpTransceiverDirectionSendrecv
+	}
+	if mediaDesc.GetAttribute("sendonly") != nil {
+		return RTCRtpTransceiverDirectionSendonly
+	}
+	if mediaDesc.GetAttribute("recvonly") != nil {
+		return RTCRtpTransceiverDirectionRecvonly
+	}
+	if mediaDesc.GetAttribute("inactive") != nil {
+		return RTCRtpTransceiverDirectionInactive
+	}
+	return RTCRtpTransceiverDirectionStopped
+}
+
+func (pc *RTCPeerConnection) addFingerprints(mediaDesc *sdp.MediaDesc, fingerprints []*RTCDtlsFingerprint) {
+	for _, fingerprint := range fingerprints {
+		mediaDesc.AddAttribute("fingerprint", fingerprint.Algorithm+" "+fingerprint.Value)
+	}
+}
+
+func (pc *RTCPeerConnection) addMatchedSetup(mediaDesc *sdp.MediaDesc, setupToMatch string) {
+	if setupToMatch == "actpass" || setupToMatch == "passive" {
+		mediaDesc.AddAttribute("setup", "active")
+	} else {
+		mediaDesc.AddAttribute("setup", "passive")
+	}
+}
+
 func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessionToMatch *sdp.Session) error {
 	var isRejected []bool
 
@@ -141,11 +195,14 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 	}
 	isBundled := make(map[string]bool)
 
+	supportsBundle := false
+
 	groups := sessionToMatch.GetAttribute("group")
 	for _, group := range groups {
 		if len(group) > 6 && group[:6] == "BUNDLE" {
 			for _, mid := range strings.Split(group, " ")[1:] {
 				isBundled[mid] = true
+				supportsBundle = true
 			}
 		}
 	}
@@ -169,6 +226,22 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 			}
 		}
 
+		if mediaDesc.Media == "video" {
+			gotSupportedCodecs, err := pc.containSupportedCodecs(mediaDesc, []string{"H264 AVC"})
+			if err != nil {
+				return fmt.Errorf("error with codecs: %v", err)
+			}
+			if !gotSupportedCodecs {
+				isRejected = append(isRejected, true)
+				continue
+			}
+		}
+
+		if mediaDesc.Media != "video" && mediaDesc.Media != "audio" && mediaDesc.Media != "application" {
+			isRejected = append(isRejected, true)
+			continue
+		}
+
 		tranceiver := pc.findTransceiverByMid(mid)
 		if tranceiver.stopped {
 			isRejected = append(isRejected, true)
@@ -186,6 +259,94 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 		}
 
 		isRejected = append(isRejected, false)
+	}
+
+	isFirstInGroup = map[string]bool{
+		"audio":       true,
+		"video":       true,
+		"text":        true,
+		"application": true,
+		"message":     true,
+	}
+
+	var err error
+
+	var fingerprints []*RTCDtlsFingerprint
+	for _, cert := range pc.configuration.Certificates {
+		fingerprints, err = cert.getFingerprints()
+		if err != nil {
+			return fmt.Errorf("error while getting fingerprints: %v", err)
+		}
+	}
+
+	tlsID := randStringWithCharset(120, alphaNumCharset)
+
+	for index, mediaDescToMatch := range sessionToMatch.MediaDescs {
+		mediaDesc := &sdp.MediaDesc{}
+		mediaDesc.PortsNum = 1
+		mediaDesc.Proto = mediaDescToMatch.Proto
+
+		if isRejected[index] {
+			mediaDesc.Port = 0
+		} else {
+			mediaDesc.Port = 9
+			pc.addFingerprints(mediaDesc, fingerprints)
+		}
+
+		tranceiver := pc.findTransceiverByMid(mediaDescToMatch.GetAttribute("mid")[0])
+		if tranceiver.sender.track.kind == "audio" {
+			pc.addAudioCodecs(mediaDesc)
+		} else if tranceiver.sender.track.kind == "video" {
+			pc.addAudioCodecs(mediaDesc)
+		}
+
+		mediaDesc.Connections = []*sdp.Connection{
+			{
+				Nettype:        sdp.NetworkInternet,
+				Addrtype:       sdp.TypeIPv4,
+				ConnectionAddr: "0.0.0.0",
+				AddressesNum:   1,
+			},
+		}
+
+		if supportsBundle && pc.isBundleOnly(bundlePolicy, isFirstInGroup, tranceiver.sender.track.kind) {
+
+			iceUfrag := mediaDescToMatch.GetAttribute("ice-ufrag")
+			if iceUfrag == nil {
+				return fmt.Errorf("error getting ice credentials")
+			}
+			icePwd := mediaDescToMatch.GetAttribute("ice-pwd")
+			if icePwd == nil {
+				return fmt.Errorf("error getting ice credentials")
+			}
+			mediaDesc.AddAttribute("ice-ufrag", iceUfrag[0])
+			mediaDesc.AddAttribute("ice-pwd", icePwd[0])
+		} else {
+			iceCredentials := pc.genereateIceCredentials()
+			mediaDesc.AddAttribute("ice-ufrag", iceCredentials.iceUfrag)
+			mediaDesc.AddAttribute("ice-pwd", iceCredentials.icePwd)
+			mediaDesc.AddAttribute("tls-id", tlsID)
+
+			setup := mediaDescToMatch.GetAttribute("setup")
+			if setup == nil {
+				return fmt.Errorf("no setup in offer media description")
+			}
+			pc.addMatchedSetup(mediaDesc, setup[0])
+
+			if mediaDescToMatch.GetAttribute("rtcp-rsize") != nil {
+				mediaDesc.AddAttribute("rtcp-rsize", " ")
+			}
+		}
+
+		if mid := mediaDescToMatch.GetAttribute("mid"); mid != nil {
+			mediaDesc.AddAttribute("mid", mid[0])
+		}
+
+		pc.addMatchedDirection(mediaDesc, pc.getDirection(mediaDescToMatch))
+
+		for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
+			mediaDesc.AddAttribute("msid", mediaStreamId)
+		}
 	}
 
 	return nil
@@ -478,7 +639,7 @@ func (pc *RTCPeerConnection) addMediaSections(session *sdp.Session, mids []strin
 	return nil
 }
 
-func (pc *RTCPeerConnection) addSessionLevelAttributes(session *RTCSession) {
+func (pc *RTCPeerConnection) addSessionLevelAttributes(session *sdp.Session) {
 	session.Version = 0
 	session.Originator = &sdp.Origin{
 		Username:       "-",
