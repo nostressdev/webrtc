@@ -39,6 +39,16 @@ type RTCPeerConnection struct {
 	// TODO(@alisa-vernigor): add event handlers
 }
 
+type MediaType string
+
+const (
+	MediaTypeAudio       = "audio"
+	MediaTypeVideo       = "video"
+	MediaTypeText        = "text"
+	MediaTypeApplication = "application"
+	MediaTypeMessage     = "message"
+)
+
 func (pc *RTCPeerConnection) matchIceOptions(session *sdp.Session, sessionToMatch *sdp.Session) {
 	iceOptionsValues := sessionToMatch.GetAttribute("ice-options")
 	for _, iceOptionsValue := range iceOptionsValues {
@@ -153,16 +163,16 @@ func (pc *RTCPeerConnection) addMatchedDirection(mediaDesc *sdp.MediaDesc, direc
 }
 
 func (pc *RTCPeerConnection) getDirection(mediaDesc *sdp.MediaDesc) RTCRtpTransceiverDirection {
-	if mediaDesc.GetAttribute("sendrecv") != nil {
+	if mediaDesc.GetAttribute(RTCRtpTransceiverDirectionSendrecv) != nil {
 		return RTCRtpTransceiverDirectionSendrecv
 	}
-	if mediaDesc.GetAttribute("sendonly") != nil {
+	if mediaDesc.GetAttribute(RTCRtpTransceiverDirectionSendonly) != nil {
 		return RTCRtpTransceiverDirectionSendonly
 	}
-	if mediaDesc.GetAttribute("recvonly") != nil {
+	if mediaDesc.GetAttribute(RTCRtpTransceiverDirectionRecvonly) != nil {
 		return RTCRtpTransceiverDirectionRecvonly
 	}
-	if mediaDesc.GetAttribute("inactive") != nil {
+	if mediaDesc.GetAttribute(RTCRtpTransceiverDirectionInactive) != nil {
 		return RTCRtpTransceiverDirectionInactive
 	}
 	return RTCRtpTransceiverDirectionStopped
@@ -174,35 +184,208 @@ func (pc *RTCPeerConnection) addFingerprints(mediaDesc *sdp.MediaDesc, fingerpri
 	}
 }
 
-func (pc *RTCPeerConnection) addMatchedSetup(mediaDesc *sdp.MediaDesc, setupToMatch string) {
-	if setupToMatch == "actpass" || setupToMatch == "passive" {
-		mediaDesc.AddAttribute("setup", "active")
+type setupType string
+
+const (
+	setupTypeActpass = "actpass"
+	setupTypeActive  = "active"
+	setupTypePassive = "passive"
+)
+
+func (pc *RTCPeerConnection) addMatchedSetup(mediaDesc *sdp.MediaDesc, mediaDescToMatch *sdp.MediaDesc) error {
+	setupToMatch := mediaDescToMatch.GetAttribute("setup")
+	if setupToMatch == nil {
+		return fmt.Errorf("no setup in offer media description")
+	}
+
+	if setupToMatch[0] == setupTypeActpass || setupToMatch[0] == setupTypePassive {
+		mediaDesc.AddAttribute("setup", setupTypeActive)
 	} else {
-		mediaDesc.AddAttribute("setup", "passive")
+		mediaDesc.AddAttribute("setup", setupTypePassive)
+	}
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) addIceCredentials(mediaDesc *sdp.MediaDesc, credentials *iceCredentials) {
+	mediaDesc.AddAttribute("ice-ufrag", credentials.iceUfrag)
+	mediaDesc.AddAttribute("ice-pwd", credentials.icePwd)
+}
+
+func (pc *RTCPeerConnection) addMatchedIceCredentials(mediaDesc *sdp.MediaDesc, mediaDescToMatch *sdp.MediaDesc) error {
+	iceUfrag := mediaDescToMatch.GetAttribute("ice-ufrag")
+	if iceUfrag == nil {
+		return fmt.Errorf("error getting ice credentials")
+	}
+	icePwd := mediaDescToMatch.GetAttribute("ice-pwd")
+	if icePwd == nil {
+		return fmt.Errorf("error getting ice credentials")
+	}
+
+	pc.addIceCredentials(mediaDesc, &iceCredentials{iceUfrag[0], icePwd[0]})
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) generateMediaSectionBase(isBundled bool, fingerprints []*RTCDtlsFingerprint,
+	kind MediaType, tlsID string) *sdp.MediaDesc {
+	mediaDesc := &sdp.MediaDesc{}
+	mediaDesc.Connections = []*sdp.Connection{
+		{
+			Nettype:        sdp.NetworkInternet,
+			Addrtype:       sdp.TypeIPv4,
+			ConnectionAddr: "0.0.0.0",
+			AddressesNum:   1,
+		},
+	}
+
+	if isBundled {
+		mediaDesc.Port = 0
+	} else {
+		mediaDesc.Port = 9
+		pc.addFingerprints(mediaDesc, fingerprints)
+		mediaDesc.AddAttribute("tls-id", tlsID)
+	}
+	mediaDesc.Media = string(kind)
+	return mediaDesc
+}
+
+func (pc *RTCPeerConnection) addCodecs(mediaDesc *sdp.MediaDesc, kind MediaType) {
+	if kind == MediaTypeAudio {
+		pc.addAudioCodecs(mediaDesc)
+	} else if kind == MediaTypeVideo {
+		pc.addVideoCodecs(mediaDesc)
 	}
 }
 
-func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessionToMatch *sdp.Session) error {
+func (pc *RTCPeerConnection) generateUnmatchedMediaSectionBase(fingerprints []*RTCDtlsFingerprint,
+	isFirstInGroup map[MediaType]bool, tranceiver *RTCRtpTransceiver, tlsID string, msidsToMidStrings map[string][]string,
+	mids []string) *sdp.MediaDesc {
+
+	bundlePolicy := pc.configuration.BundlePolicy
+	kind := MediaType(tranceiver.receiver.track.kind)
+	isBundled := pc.isBundleOnly(bundlePolicy, isFirstInGroup, kind)
+
+	mediaDesc := pc.generateMediaSectionBase(isBundled, fingerprints, kind, tlsID)
+
+	pc.addCodecs(mediaDesc, kind)
+
+	if isBundled {
+		mediaDesc.AddAttribute("bundle-only", " ")
+	} else {
+		mediaDesc.AddAttribute("rtcp-rsize", " ")
+		mediaDesc.AddAttribute("setup", "actpass")
+
+		pc.addIceCredentials(mediaDesc, pc.genereateIceCredentials())
+	}
+	mediaDesc.Proto = []string{"UDP", "TLS", "RTP", "SAVPF"}
+
+	for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
+		mediaDesc.AddAttribute("msid", mediaStreamId)
+		msidsToMidStrings[mediaStreamId] = append(msidsToMidStrings[mediaStreamId], strconv.FormatInt(pc.midCounter, 10))
+	}
+
+	mid := strconv.FormatInt(pc.midCounter, 10)
+	tranceiver.mid = mid
+	mediaDesc.AddAttribute("mid", mid)
+	mids = append(mids, mid)
+	pc.midCounter++
+
+	mediaDesc.AddAttribute(string(tranceiver.direction), " ")
+
+	return mediaDesc
+}
+
+func (pc *RTCPeerConnection) generateMatchedMediaSectionBase(fingerprints []*RTCDtlsFingerprint,
+	isFirstInGroup map[MediaType]bool, tranceiver *RTCRtpTransceiver, tlsID string, isBundled bool,
+	mids []string, mediaDescToMatch *sdp.MediaDesc, supportsBundle bool) (*sdp.MediaDesc, error) {
+	var mediaDesc *sdp.MediaDesc
+
+	bundlePolicy := pc.configuration.BundlePolicy
+	kind := MediaType(tranceiver.sender.track.kind)
+
+	var credentials *iceCredentials
+	if supportsBundle && pc.isBundleOnly(bundlePolicy, isFirstInGroup, kind) {
+		credentials.iceUfrag = mediaDescToMatch.GetAttribute("ice-ufrag")
+		if iceUfrag == nil {
+			return nil, fmt.Errorf("error getting ice credentials")
+		}
+		credentials.icePwd = mediaDescToMatch.GetAttribute("ice-pwd")
+		if icePwd == nil {
+			return nil, fmt.Errorf("error getting ice credentials")
+		}
+
+	} else {
+		iceCredentials := pc.genereateIceCredentials()
+		err := pc.addMatchedSetup(mediaDesc, mediaDescToMatch)
+		if err != nil {
+			return nil, fmt.Errorf("error while adding setup attribute: %v", err)
+		}
+
+		if mediaDescToMatch.GetAttribute("rtcp-rsize") != nil {
+			mediaDesc.AddAttribute("rtcp-rsize", " ")
+		}
+	}
+	mediaDesc.Proto = mediaDescToMatch.Proto
+	pc.addIceCredentials(mediaDesc, credentials)
+
+	if mid := mediaDescToMatch.GetAttribute("mid"); mid != nil {
+		mediaDesc.AddAttribute("mid", mid[0])
+	}
+
+	pc.addMatchedDirection(mediaDesc, pc.getDirection(mediaDescToMatch))
+
+	for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
+		mediaDesc.AddAttribute("msid", mediaStreamId)
+	}
+
+	return mediaDesc, nil
+}
+
+func (pc *RTCPeerConnection) addMatchedDataSection(session *sdp.Session, mediaDescToMatch *sdp.MediaDesc, fingerprints []*RTCDtlsFingerprint, tlsID string) error {
+	mediaDesc.Proto = mediaDescToMatch.Proto
+	mediaDesc.Fmts = mediaDescToMatch.Fmts
+
+	mediaDesc.AddAttribute("sctp-port", "5000")
+	mediaDesc.AddAttribute("rtcp-rsize", " ")
+
+	setup := mediaDescToMatch.GetAttribute("setup")
+	if setup == nil {
+		return fmt.Errorf("no setup in offer media description")
+	}
+	pc.addMatchedSetup(mediaDesc, setup[0])
+
+	mediaDesc.AddAttribute("tls-id", tlsID)
+
+	pc.addIceCredentials(mediaDesc, pc.genereateIceCredentials())
+
+	if mediaDescToMatch.GetAttribute("rtcp-rsize") != nil {
+		mediaDesc.AddAttribute("rtcp-rsize", " ")
+	}
+
+	pc.addFingerprints(mediaDesc, fingerprints)
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) getRejectedVector(session *sdp.Session, sessionToMatch *sdp.Session) ([]bool, error) {
 	var isRejected []bool
 
 	bundlePolicy := pc.configuration.BundlePolicy
-	isFirstInGroup := map[string]bool{
-		"audio":       true,
-		"video":       true,
-		"text":        true,
-		"application": true,
-		"message":     true,
+	isFirstInGroup := map[MediaType]bool{
+		MediaTypeAudio:       true,
+		MediaTypeVideo:       true,
+		MediaTypeText:        true,
+		MediaTypeApplication: true,
+		MediaTypeMessage:     true,
 	}
 	isBundled := make(map[string]bool)
-
-	supportsBundle := false
 
 	groups := sessionToMatch.GetAttribute("group")
 	for _, group := range groups {
 		if len(group) > 6 && group[:6] == "BUNDLE" {
 			for _, mid := range strings.Split(group, " ")[1:] {
 				isBundled[mid] = true
-				supportsBundle = true
 			}
 		}
 	}
@@ -215,10 +398,15 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 		}
 		mid := midAttr[0]
 
+		if mediaDesc.Media == "application" {
+			isRejected = append(isRejected, false)
+			continue
+		}
+
 		if mediaDesc.Media == "audio" {
 			gotSupportedCodecs, err := pc.containSupportedCodecs(mediaDesc, []string{"opus"})
 			if err != nil {
-				return fmt.Errorf("error with codecs: %v", err)
+				return nil, fmt.Errorf("error with codecs: %v", err)
 			}
 			if !gotSupportedCodecs {
 				isRejected = append(isRejected, true)
@@ -229,7 +417,7 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 		if mediaDesc.Media == "video" {
 			gotSupportedCodecs, err := pc.containSupportedCodecs(mediaDesc, []string{"H264 AVC"})
 			if err != nil {
-				return fmt.Errorf("error with codecs: %v", err)
+				return nil, fmt.Errorf("error with codecs: %v", err)
 			}
 			if !gotSupportedCodecs {
 				isRejected = append(isRejected, true)
@@ -248,7 +436,7 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 			continue
 		}
 
-		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, tranceiver.sender.track.kind) {
+		if pc.isBundleOnly(bundlePolicy, isFirstInGroup, MediaType(tranceiver.sender.track.kind)) {
 			isRejected = append(isRejected, true)
 			continue
 		}
@@ -261,91 +449,51 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 		isRejected = append(isRejected, false)
 	}
 
-	isFirstInGroup = map[string]bool{
-		"audio":       true,
-		"video":       true,
-		"text":        true,
-		"application": true,
-		"message":     true,
-	}
+	return isRejected, nil
+}
 
+func (pc *RTCPeerConnection) generateFingerprints() ([]*RTCDtlsFingerprint, error) {
 	var err error
-
 	var fingerprints []*RTCDtlsFingerprint
 	for _, cert := range pc.configuration.Certificates {
 		fingerprints, err = cert.getFingerprints()
 		if err != nil {
-			return fmt.Errorf("error while getting fingerprints: %v", err)
+			return nil, fmt.Errorf("error while getting fingerprints: %v", err)
 		}
+	}
+	return fingerprints, nil
+}
+
+func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessionToMatch *sdp.Session) error {
+	isFirstInGroup := map[MediaType]bool{
+		MediaTypeAudio:       true,
+		MediaTypeVideo:       true,
+		MediaTypeText:        true,
+		MediaTypeApplication: true,
+		MediaTypeMessage:     true,
+	}
+
+	var isRejected []bool
+	var err error
+
+	isRejected, err = pc.getRejectedVector(session, sessionToMatch)
+	if err != nil {
+		fmt.Errorf("error while analyzing rejected media sections: %v", err)
+	}
+
+	fingerprints, err := pc.generateFingerprints()
+	if err != nil {
+		return fmt.Errorf("error while generating fingerprints")
 	}
 
 	tlsID := randStringWithCharset(120, alphaNumCharset)
 
 	for index, mediaDescToMatch := range sessionToMatch.MediaDescs {
-		mediaDesc := &sdp.MediaDesc{}
-		mediaDesc.PortsNum = 1
-		mediaDesc.Proto = mediaDescToMatch.Proto
-
-		if isRejected[index] {
-			mediaDesc.Port = 0
-		} else {
-			mediaDesc.Port = 9
-			pc.addFingerprints(mediaDesc, fingerprints)
-		}
-
 		tranceiver := pc.findTransceiverByMid(mediaDescToMatch.GetAttribute("mid")[0])
-		if tranceiver.sender.track.kind == "audio" {
-			pc.addAudioCodecs(mediaDesc)
-		} else if tranceiver.sender.track.kind == "video" {
-			pc.addAudioCodecs(mediaDesc)
-		}
 
-		mediaDesc.Connections = []*sdp.Connection{
-			{
-				Nettype:        sdp.NetworkInternet,
-				Addrtype:       sdp.TypeIPv4,
-				ConnectionAddr: "0.0.0.0",
-				AddressesNum:   1,
-			},
-		}
-
-		if supportsBundle && pc.isBundleOnly(bundlePolicy, isFirstInGroup, tranceiver.sender.track.kind) {
-
-			iceUfrag := mediaDescToMatch.GetAttribute("ice-ufrag")
-			if iceUfrag == nil {
-				return fmt.Errorf("error getting ice credentials")
-			}
-			icePwd := mediaDescToMatch.GetAttribute("ice-pwd")
-			if icePwd == nil {
-				return fmt.Errorf("error getting ice credentials")
-			}
-			mediaDesc.AddAttribute("ice-ufrag", iceUfrag[0])
-			mediaDesc.AddAttribute("ice-pwd", icePwd[0])
-		} else {
-			iceCredentials := pc.genereateIceCredentials()
-			mediaDesc.AddAttribute("ice-ufrag", iceCredentials.iceUfrag)
-			mediaDesc.AddAttribute("ice-pwd", iceCredentials.icePwd)
-			mediaDesc.AddAttribute("tls-id", tlsID)
-
-			setup := mediaDescToMatch.GetAttribute("setup")
-			if setup == nil {
-				return fmt.Errorf("no setup in offer media description")
-			}
-			pc.addMatchedSetup(mediaDesc, setup[0])
-
-			if mediaDescToMatch.GetAttribute("rtcp-rsize") != nil {
-				mediaDesc.AddAttribute("rtcp-rsize", " ")
-			}
-		}
-
-		if mid := mediaDescToMatch.GetAttribute("mid"); mid != nil {
-			mediaDesc.AddAttribute("mid", mid[0])
-		}
-
-		pc.addMatchedDirection(mediaDesc, pc.getDirection(mediaDescToMatch))
-
-		for _, mediaStreamId := range tranceiver.sender.associatedMediaStreamIds {
-			mediaDesc.AddAttribute("msid", mediaStreamId)
+		if tranceiver.sender.track.kind == "application" {
+			pc.addMatchedDataSection(session, mediaDescToMatch, fingerprints, tlsID)
+			continue
 		}
 	}
 
@@ -355,20 +503,11 @@ func (pc *RTCPeerConnection) addMatchedMediaSections(session *sdp.Session, sessi
 func (pc *RTCPeerConnection) createAnswer(answer *RTCSessionDescription) (*sdp.Session, error) {
 	session := &sdp.Session{}
 
-	pc.addSessionLevelAttributes(session)
-	pc.matchIceOptions(session, pc.currentRemoteDescription.Session)
-
+	pc.addMatchedSessionLevelAttributes(session)
 	pc.addLSGroups(session, pc.currentLocalDescription.Session)
-
 	pc.addMatchedMediaSections(session, pc.currentRemoteDescription.Session)
 
-	return nil, nil
-}
-
-func (pc *RTCPeerConnection) applyLocalDescription(description *RTCSessionDescription) error {
-	for _, mediaDesc := range description.Session.MediaDescs {
-
-	}
+	return session, nil
 }
 
 func (pc *RTCPeerConnection) processLocalDescription(description *RTCSessionDescription) error {
@@ -465,7 +604,7 @@ func (pc *RTCPeerConnection) setLocalDescription(description *RTCSessionDescript
 	return nil
 }
 
-func (pc *RTCPeerConnection) isBundleOnly(bundlePolicy RTCBundlePolicy, isFirstInGroup map[string]bool, kind string) bool {
+func (pc *RTCPeerConnection) isBundleOnly(bundlePolicy RTCBundlePolicy, isFirstInGroup map[MediaType]bool, kind MediaType) bool {
 	if bundlePolicy == RTCBundlePolicyBalancded {
 		isFirst := isFirstInGroup[kind]
 		isFirstInGroup[kind] = false
@@ -574,8 +713,12 @@ func (pc *RTCPeerConnection) addMediaSection(session *sdp.Session, tranceiver *R
 	session.MediaDescs = append(session.MediaDescs, media)
 }
 
+func (pc *RTCPeerConnection) addDataMediaSections() {
+
+}
+
 func (pc *RTCPeerConnection) addDataMediaSection(session *sdp.Session,
-	mids []string, msidsToMidStrings map[string][]string, isFirstInGroup map[string]bool, tlsID string,
+	mids []string, msidsToMidStrings map[string][]string, tlsID string,
 	iceUfrag string, icePwd string, fingerprints []*RTCDtlsFingerprint) {
 	media := &sdp.MediaDesc{}
 	media.Connections = []*sdp.Connection{
@@ -634,9 +777,14 @@ func (pc *RTCPeerConnection) addMediaSections(session *sdp.Session, mids []strin
 		pc.addMediaSection(session, tranceiver, mids, msidsToMidStrings, isFirstInGroup, tlsID, iceUfrag, icePwd, fingerprints)
 	}
 
-	pc.addDataMediaSection(session, mids, msidsToMidStrings, isFirstInGroup, tlsID, iceUfrag, icePwd, fingerprints)
+	pc.addDataMediaSection(session, mids, msidsToMidStrings, isFirstInGroup, tlsID, iceUfrag, icePwd)
 
 	return nil
+}
+
+func (pc *RTCPeerConnection) addMatchedSessionLevelAttributes(session *sdp.Session) {
+	pc.addSessionLevelAttributes(session)
+	pc.matchIceOptions(session, pc.currentRemoteDescription.Session)
 }
 
 func (pc *RTCPeerConnection) addSessionLevelAttributes(session *sdp.Session) {
@@ -687,17 +835,6 @@ func (pc *RTCPeerConnection) createInitialOffer() (*sdp.Session, error) {
 	return session, nil
 }
 
-func (pc *RTCPeerConnection) createSubsequentOffer() (*sdp.Session, error) {
-	if pc.signalingState == RTCSignalingStateStable {
-		return pc.createSessionDesc()
-	}
-
-	if pc.currentRemoteDescription != nil {
-	}
-
-	return nil, nil
-}
-
 func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionDescription, error) {
 	if pc.isClosed {
 		return nil, makeError(ErrInvalidState, "connection is closed")
@@ -726,7 +863,7 @@ func (pc *RTCPeerConnection) CreateOffer(options *RTCOfferOptions) (*RTCSessionD
 		if pc.currentRemoteDescription != nil {
 			for _, media := range pc.currentLocalDescription.Session.MediaDescs {
 				midArg := media.GetAttribute("mid")
-				mid, err := strconv.ParseInt(midArg, 10, 64)
+				mid, err := strconv.ParseInt(midArg[0], 10, 64)
 				if err != nil {
 					return nil, fmt.Errorf("error while getting mid value: %v", err)
 				}

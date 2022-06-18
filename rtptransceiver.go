@@ -8,4 +8,6 @@ type RTCRtpTransceiver struct {
 	currentDirection RTCRtpTransceiverDirection
 	stopped          bool
 	stopping         bool
+
+	codecs []RTPCodecParameters
 }
