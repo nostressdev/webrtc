@@ -512,6 +512,52 @@ func (pc *RTCPeerConnection) createAnswer(answer *RTCSessionDescription) (*sdp.S
 	return session, nil
 }
 
+func (pc *RTCPeerConnection) getIceOptions(session *sdp.Session) []string {
+	options := session.GetAttribute("ice-options")
+	if options == nil {
+		return nil
+	}
+
+	return strings.Split(options[0], " ")
+}
+
+func (pc *RTCPeerConnection) applyRemoteDescription(session *sdp.Session) {
+	iceOptions := pc.getIceOptions(session)
+	pc.canTrickleIceCandidates = false
+	if iceOptions != nil {
+		for _, iceOption := range iceOptions {
+			if iceOption == "trickle" {
+				pc.canTrickleIceCandidates = true
+				break
+			}
+		}
+	}
+	
+}
+
+func (pc *RTCPeerConnection) processRemoteDescription(description *RTCSessionDescription) error {
+	if description.SDPType == RTCSdpTypeRollback {
+		pc.processRollback(description)
+		return nil
+	}
+
+	if description.SDPType == RTCSdpTypeOffer {
+		if !(pc.signalingState == RTCSignalingStateStable || pc.signalingState == RTCSignalingStateHaveRemoteOffer) {
+			return fmt.Errorf("description type offer, but signaling state is not stable/have-remote-offer")
+		}
+	} else if description.SDPType == RTCSdpTypeAnswer || description.SDPType == RTCSdpTypePranswer {
+		if !(pc.signalingState == RTCSignalingStateHaveLocalOffer || pc.signalingState == RTCSignalingStateHaveRemotePranswer) {
+			return fmt.Errorf("description type answer/pranswer, but signaling state is not have-local-offer/have-remote-pranswer")
+		}
+	}
+
+	pc.applyRemoteDescription(description.Session)
+
+	return nil
+}
+
+func (pc *RTCPeerConnection) processRollback(rollback *RTCSessionDescription) {}
+
 func (pc *RTCPeerConnection) processLocalDescription(description *RTCSessionDescription) error {
 	switch description.SDPType {
 	case RTCSdpTypeRollback:
