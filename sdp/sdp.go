@@ -127,3 +127,39 @@ const (
 	TCPproto   = "TCP"
 	MSRPproto  = "MSRP"
 )
+
+func (m *MediaDesc) AddAttribute(name string, value string) {
+	m.Attributes = append(m.Attributes, &Attribute{Name: name, Value: value})
+}
+
+func (s *Session) AddAttribute(name string, value string) {
+	s.Attributes = append(s.Attributes, &Attribute{Name: name, Value: value})
+}
+
+func (m *MediaDesc) GetAttribute(name string) []string {
+	var res []string
+	for _, attribute := range m.Attributes {
+		if attribute.Name == name {
+			res = append(res, attribute.Value)
+		}
+	}
+	return res
+}
+
+func (s *Session) GetAttribute(name string) []string {
+	var res []string
+	for _, attribute := range s.Attributes {
+		if attribute.Name == name {
+			res = append(res, attribute.Value)
+		}
+	}
+	return res
+}
+
+func (s *Session) ExcludeAttribute(name string) {
+	for index, attribute := range s.Attributes {
+		if attribute.Name == name {
+			s.Attributes = append(s.Attributes[:index], s.Attributes[index+1:]...)
+		}
+	}
+}

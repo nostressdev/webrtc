@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	gosdp "github.com/pixelbender/go-sdp/sdp"
 )
 
 var unmarshalErrorTests = []*testVector{
@@ -282,6 +283,12 @@ type testVector struct {
 	Session *Session
 }
 
+type defaultTestVector struct {
+	Name    string
+	Data    string
+	Session *gosdp.Session
+}
+
 func dump(v interface{}) string {
 	b, err := json.MarshalIndent(v, "", "    ")
 	if err != nil {
@@ -325,4 +332,28 @@ func FuzzDecode(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data string) {
 		NewDecoder(strings.NewReader(data)).Decode()
 	})
+}
+
+func BenchmarkDecode(b *testing.B) {
+	for _, test := range marshalTests {
+		b.Run(test.Name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				d := NewDecoder(strings.NewReader(test.Data))
+				d.Decode()
+			}
+		})
+	}
+}
+
+func BenchmarkDefaultDecode(b *testing.B) {
+	for _, test := range defaultMarshalTests {
+		b.Run(test.Name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				d := gosdp.NewDecoder(strings.NewReader(test.Data))
+				d.Decode()
+			}
+		})
+	}
 }

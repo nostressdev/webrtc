@@ -225,7 +225,7 @@ func (e *Encoder) encodeEncryptionKeys(encryptionKeys []*EncryptionKey) {
 
 func (e *Encoder) encodeAttribute(attribute *Attribute) {
 	e.writeField(AttributeField).writeString(attribute.Name)
-	if attribute.Value != " " {
+	if attribute.Value != " " && attribute.Value != "" {
 		e.writeChar(':').writeString(attribute.Value)
 	}
 	e.writeNewline()
@@ -245,11 +245,13 @@ func (e *Encoder) encodeMediaDesc(desc *MediaDesc) {
 			e.writeChar('/')
 		}
 	}
-	e.writeSpace()
-	for i, fmt := range desc.Fmts {
-		e.writeString(fmt)
-		if i+1 != len(desc.Fmts) {
-			e.writeSpace()
+	if len(desc.Fmts) != 0 {
+		e.writeSpace()
+		for i, fmt := range desc.Fmts {
+			e.writeString(fmt)
+			if i+1 != len(desc.Fmts) {
+				e.writeSpace()
+			}
 		}
 	}
 
